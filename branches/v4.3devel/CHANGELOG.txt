@@ -1,3 +1,8 @@
+4.3             (2017)
+     - Add ability to take a list of file pairs from a git diff (by Kevin X)
+     - Rework the main text windows as canvases so evertyhing stays visually
+       in sync while scrolling (by vamp)
+
 4.2             (2011):
      * Works with Subversion 1.7
      * Make opening file dialog know where it started from, and start in the
