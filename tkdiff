@@ -43,7 +43,7 @@ wm withdraw .
 # set a couple o' globals that we might need sooner than later
 set g(name) "TkDiff"
 set g(version) "4.3"
-set g(started) 0
+set g(startPhase) 0
 
 # FIXME - move to preferences
 option add "*TearOff" false 100
@@ -249,11 +249,11 @@ array set report {
     doSideLeft                0
     doLineNumbersLeft         1
     doChangeMarkersLeft       1
-    doTextLeft                1
+    doTextLeft                "Full Text"
     doSideRight               1
     doLineNumbersRight        1
     doChangeMarkersRight      1
-    doTextRight               1
+    doTextRight               "Full Text"
     filename                  "tkdiff.out"
 }
 
@@ -275,13 +275,10 @@ if {[string first "color" [winfo visual .]] >= 0} {
         overlaptag "-background yellow"
         bytetag    "-background blue -foreground white"
         inlinetag  "-background $colorchg -font $bold"
-        -          "-background $colordel -foreground $colorins"
-        +          "-background $colorins -foreground $colordel"
-        !          "-background $colorchg -foreground $colorchg"
-        ?          "-background yellow -foreground yellow"
         mapins     "$colorins"
         mapdel     "$colordel"
         mapchg     "$colorchg"
+        adjcdr     "magenta"
     }]
 
 } else {
@@ -297,13 +294,10 @@ if {[string first "color" [winfo visual .]] >= 0} {
         overlaptag "-background black -foreground white"
         bytetag    "-underline 1"
         inlinetag  "-underline 1"
-        -          "-background black -foreground white"
-        +          "-background black -foreground white"
-        !          "-background black -foreground white"
-        ?          "-background black -foreground white"
         mapins     "black"
         mapdel     "black"
         mapchg     "black"
+        adjcdr     "white"
     }]
 }
 
@@ -814,9 +808,9 @@ proc plot-line-info {side args} {
                                 break ;# load NEXT scrInf,* entry settings
                             }
                             # Restart loop if 'Lnum' is NOW INSIDE the params
-                            # of the newly read-in hunk (supports a future
-                            # "diff-split" feature where hunks could abbut)
-                            if {$Lnum == $Snum}  continue
+                            # of the newly read-in hunk (to support abutted
+                            # hunks created by the Split/Combine feature)
+                            if {$Lnum >= $Snum}  continue
                         }
                         set CB false ; set aNewGRP "t" ;# Is beyond entry
                     } else { incr Lnum ; continue }    ;# A  PADDING line
@@ -987,7 +981,6 @@ proc split-conflictfile {name} {
 
     return "{$temp1} {$temp2} {$firstname} {$secondname}"
 }
-
 
 ###############################################################################
 # Get a revision of a file
@@ -1667,13 +1660,14 @@ proc create-display {} {
     set w(menubar) .menubar
     set w(toolbar) .toolbar
     set w(status) .status
-
-    # other random windows...
-    set w(preferences) .pref
-    set w(findDialog) .findDialog
     set w(popupMenu) .popupMenu
 
-    # now, simply build all the pieces
+    # 'identify' other windows that possibly MAY exist later...
+    set w(preferences) .pref
+    set w(findDialog) .findDialog
+    set w(scDialog) .scDialog
+
+    # now, simply build all the REQUIRED pieces
     build-menubar
     build-toolbar
     build-client
@@ -1752,33 +1746,34 @@ proc toggleSyncScroll {args} {
 }
 
 ###############################################################################
-# show the popup menu, optionally changing some of the entries based on
-# where the user clicked
+# show the popup menu, reconfiguring some entries based on where user clicked
+#  (notably - over the MAP window becomes somewhat Left/Right ambiguous)
 ###############################################################################
 proc show-popupMenu {x y} {
     global w
     global g
 
     set window [winfo containing $x $y]
-    if {[winfo class $window] == "Text"} {
-        $w(popupMenu) entryconfigure "Find..." -state normal
+    if {$window == $w(LeftText)  || $window == $w(LeftInfo)  \
+    ||  $window == $w(RightText) || $window == $w(RightInfo)} {
+
+        # Turn these back ON (as they MAY have been turned off below)
         if {$g(count)} {
-            $w(popupMenu) entryconfigure "Find Nearest*" -state normal
-        } else {
-            $w(popupMenu) entryconfigure "Find Nearest*" -state disable
-        }
+            $w(popupMenu) entryconfigure "Find Nearest*" -state normal }
         $w(popupMenu) entryconfigure "Edit*" -state normal
 
+        # Ensure g(activeWindow) is correct for use by above two entries
         if {$window == $w(LeftText) || $window == $w(LeftInfo)} {
-            $w(popupMenu) configure -title "File 1"
+            $w(popupMenu) configure -title "File 1" ;# why, when NOT a tearoff?
             set g(activeWindow) $w(LeftText)
         } else {
-            $w(popupMenu) configure -title "File 2"
+            $w(popupMenu) configure -title "File 2" ;# why, when NOT a tearoff?
             set g(activeWindow) $w(RightText)
         }
 
     } else {
-        $w(popupMenu) entryconfigure "Find..." -state disabled
+        # Turn these OFF in case we are NOT over the Text (or its Info) window
+        #   (no way to know which SIDE they should apply to)
         $w(popupMenu) entryconfigure "Find Nearest*" -state disabled
         $w(popupMenu) entryconfigure "Edit*" -state disabled
     }
@@ -2679,6 +2674,11 @@ proc build-menubar {} {
     $editMenu add separator
     $editMenu add command -label "Find..." -underline 0 -command show-find
     $editMenu add separator
+    $editMenu add command -label "Split..."   -underline 0 \
+      -command {splcmb-Dialog 0}
+    $editMenu add command -label "Combine..." -underline 2 \
+      -command {splcmb-Dialog 1}
+    $editMenu add separator
     $editMenu add command -label "Edit File 1" -command {
         set g(activeWindow) $w(LeftText)
         do-edit
@@ -2692,12 +2692,16 @@ proc build-menubar {} {
       -command customize
 
     set "g(tooltip,Copy)" "Copy the currently selected text to the clipboard"
-    set "g(tooltip,Find...)" "Pop up a dialog to search for a string within\
-      either file"
-    set "g(tooltip,Edit File 1)" "Launch an editor on the file on the left\
-      side of the window"
-    set "g(tooltip,Edit File 2)" "Launch an editor on the file on the right\
-      side of the window"
+    set "g(tooltip,Find...)" \
+        "Pop up a dialog to search for a string within either file"
+    set "g(tooltip,Split...)" "Pop up a dialog\
+                                to Split the current diff at specified bounds"
+    set "g(tooltip,Combine...)" "Pop up a dialog\
+                 to Combine the current diff record with ADJACENT neighbor(s)"
+    set "g(tooltip,Edit File 1)" \
+        "Launch an editor on the file on the left side of the window"
+    set "g(tooltip,Edit File 2)"  \
+        "Launch an editor on the file on the right side of the window"
     set "g(tooltip,Preferences...)" "Pop up a window to customize $g(name)"
 
     # View menu...  If you change, add or remove labels, be sure and
@@ -2791,7 +2795,7 @@ proc build-menubar {} {
       -command popup-merge
     set "g(tooltip,Show Merge Window)" "Pops up a window showing the current\
        merge results"
-    set "g(tooltip,Write Merge File)" "Write the merge file to disk. You will\
+    set "g(tooltip,Write Merge File...)" "Write the merge file to disk. You will\
        be prompted for a filename"
 
     # Multiple file list menu.
@@ -2888,6 +2892,10 @@ proc build-toolbar {} {
     set w(combo) $toolbar.combo
     set w(rediff_im) $toolbar.rediff_im
     set w(rediff_tx) $toolbar.rediff_tx
+    set w(splitDiff_im) $toolbar.split_im
+    set w(splitDiff_tx) $toolbar.split_tx
+    set w(cmbinDiff_im) $toolbar.cmbin_im
+    set w(cmbinDiff_tx) $toolbar.cmbin_tx
     set w(find_im) $toolbar.find_im
     set w(find_tx) $toolbar.find_tx
     set w(mergeChoiceLabel) $toolbar.mergechoicelbl
@@ -2933,6 +2941,17 @@ proc build-toolbar {} {
       -bd 1
     toolbutton $toolbar.rediff_tx -text "Rediff" -command recompute-diff \
       -bd 1 -pady 1
+
+    # split/combine ...
+    toolbutton $toolbar.split_im -image splitDiffImage -bd 1 \
+      -command [list splcmb-Dialog 0]
+    toolbutton $toolbar.split_tx -text "Split..." -bd 1 -pady 1 \
+      -command [list splcmb-Dialog 0]
+
+    toolbutton $toolbar.cmbin_im -image cmbinDiffImage -bd 1 \
+      -command [list splcmb-Dialog 1]
+    toolbutton $toolbar.cmbin_tx -text "Combine..." -bd 1 -pady 1\
+      -command [list splcmb-Dialog 1]
 
     # find...
     toolbutton $toolbar.find_im -image findImage -command do-find -bd 1
@@ -3020,6 +3039,10 @@ proc build-toolbar {} {
       records"}
     set_tooltips $w(rediff_tx) {"Recompute and redisplay the difference\
       records"}
+    set_tooltips $w(splitDiff_im) {"Split Diff at specified bounds"}
+    set_tooltips $w(splitDiff_tx) {"Split Diff at specified bounds"}
+    set_tooltips $w(cmbinDiff_im) {"Combine Diff with ADJACENT neighbor(s)"}
+    set_tooltips $w(cmbinDiff_tx) {"Combine Diff with ADJACENT neighbor(s)"}
     set_tooltips $w(mergeChoice12_im) {"select the diff on the left then\
       right for merging"}
     set_tooltips $w(mergeChoice12_tx) {"select the diff on the left then\
@@ -3053,7 +3076,7 @@ proc build-toolbar {} {
 }
 
 proc pack-toolbuttons {toolbar} {
-    global opts
+    global w opts
 
     if {$opts(toolbarIcons)} {
         set bp "im"
@@ -3064,6 +3087,8 @@ proc pack-toolbuttons {toolbar} {
     pack $toolbar.combo -side left -padx 2
     pack $toolbar.sep1 -side left -fill y -pady 2 -padx 2
     pack $toolbar.rediff_$bp -side left -padx 2
+    pack $toolbar.split_$bp -side left -padx 2
+    pack $toolbar.cmbin_$bp -side left -padx 2
     pack $toolbar.find_$bp -side left -padx 2
     pack $toolbar.sep2 -side left -fill y -pady 2 -padx 2
     pack $toolbar.mergechoicelbl -side left -padx 2
@@ -3098,11 +3123,18 @@ proc pack-toolbuttons {toolbar} {
     } else {
         set bord 1
     }
-    foreach b [info commands $toolbar.m1*] {
+    foreach b [info commands $toolbar.m\[12\]*] {
         $b configure -bd $bord
     }
-    foreach b [info commands $toolbar.m2*] {
-        $b configure -bd $bord
+
+    # The selectcolor MAY have been changed (via CustomCode) which is
+    # (unfortunately) not available until AFTER the widgets have been built
+    # (too dangerous to invoke CustomCode earlier). Take this opportunity
+    # to apply this ONE attribute.
+    if {$bp == "im" && [$toolbar.m1_$bp cget -selectcolor] != $w(selcolor)} {
+        foreach b [info commands $toolbar.m\[12\]*m] {
+            $b configure -selectcolor $w(selcolor)
+        }
     }
 }
 
@@ -3451,30 +3483,28 @@ proc diffmark {option {diff -1}} {
         set diff $g(pos)
     }
 
-    set widget $w(toolbar).mark[hunk-id $diff]
-
-    switch -- $option {
-    activate {
+    switch -glob -- $option {
+        activate {
             move $diff 0 1
         }
-    mark {
-            if {![winfo exists $widget]} {
-                toolbutton $widget -text "\[$diff\]" -command [list diffmark \
-                  activate $diff] -bd 1 -pady 1
+        mark { ;# Create
+            if {![winfo exists [set widget $w(toolbar).mark[hunk-id $diff]]]} {
+                toolbutton $widget -text "\[$diff\]" \
+                         -command [list diffmark activate $diff] -bd 1 -pady 1
                 pack $widget -side left -padx 2
-                set g(tooltip,$widget) "Diff Marker: Jump to diff record \
+                set g(tooltip,$widget) "Diff Marker: Jump to diff record\
                   number $diff"
             }
             update-display
         }
-    clear {
-            if {[winfo exists $widget]} {
+        clear { ;# Destroy
+            if {[winfo exists [set widget $w(toolbar).mark[hunk-id $diff]]]} {
                 destroy $widget
                 catch {unset g(tooltip,$widget)}
             }
             update-display
         }
-    clearall {
+        clearall { ;# Destroy ALL
             set bookmarks [info commands $w(toolbar).mark*]
             if {[llength $bookmarks] > 0} {
                 foreach widget $bookmarks {
@@ -3484,6 +3514,15 @@ proc diffmark {option {diff -1}} {
             }
             update-display
         }
+        "[0-9]*[acd]*[0-9]" { ;# Re-config
+            if {[winfo exists [set widget $w(toolbar).mark$option]]} {
+                $widget config -text "\[$diff\]" \
+                         -command [list diffmark activate $diff] -bd 1 -pady 1
+                set g(tooltip,$widget) "Diff Marker: Jump to diff record\
+                  number $diff"
+            }
+        }
+
     }
 }
 
@@ -4055,12 +4094,10 @@ proc apply {{remark 0}} {
     translit-plot-txtags $w(LeftText) ;# L/R Text attrs identical: just grab 1
 
     # Re-mark all the diff regions (unless we will be REDOing them altogether),
-    # (reconfiguring the toolbar buttons is normally done by remark-diffs)
-    if {$remark && !$redoDiff} {
-        remark-diffs
-    } else {reconfigure-toolbar}
+    if {$remark && !$redoDiff} { remark-diffs }
 
-    # show (or hide) various data (Lnums, Cbars and such), and we are done
+    # alter, show (or hide) various data (Lnums, Cbars, etc.), and we are done
+    reconfigure-toolbar
     do-show-Info showln
     do-show-Info showcbs
     do-show-map
@@ -4643,34 +4680,76 @@ proc merge-write-file {} {
 
 ###############################################################################
 # Add a mark where each diff begins and tag diff regions so they are visible.
-# ONLY WORKS when pre-loaded text is initially the bare original (Left) version.
+# Default case ONLY WORKS when pre-loaded text is the original (Left) version.
+# Optional arg allows adding/removing (ie. editting) hunk identifiers later on
 ###############################################################################
-proc merge-add-marks {} {
+proc merge-add-marks {{hIDS {}}} {
     global g
     global w
 
-    # Mark ALL lines first, so selection won't mess up line numbers ...
-    foreach hID $g(diff) {
-        foreach {S na na O} $g(scrInf,$hID) {break}
+    # Mark ALL lines first, so inserting choices won't mess up line numbers.
+    #   N.B> WHEN hIDS is supplied, it MUST be homogeneous: ALL or NONE can
+    #   pre-exist. And, when they dont exist, ascending order is REQUIRED.
+    if {"$hIDS" != {}} {
+        if {"mark[lindex $hIDS 0]" in [$w(mergeText) mark names]} {
+            # Exists - so remove it (and every MERGE thing pertaining to it)
+            foreach hID "$hIDS" {
+                # CRITICAL: Put the merge text content BACK to a "Left" view !
+                #  Then eliminate the mark AND choice (caller zaps the rest)
+                merge-select-version $hID $g(merge$hID) 1
+                $w(mergeText) mark unset mark$hID
+                unset g(merge$hID)
+            }
+            return 
 
-        $w(mergeText) mark set mark$hID [incr S -$O].0 ;# REAL num (not screen)
-        $w(mergeText) mark gravity mark$hID left
+        } else {
+            # NEW hID - Find WHERE to add each, and then do so
+            #   May require some computation to get there
+            foreach hID "$hIDS" {
+                # First grab the closet PRIOR hunk (if there is one)
+                if {[set i [hunk-ndx $hID]] > 1} {incr i -1}
+                if {"[set prvHid [hunk-id $i]]" != "$hID"} {
+                    # Now determine WHERE that prev hunk sits in 'mergeText'
+                    # ADDing its CURRENT 'choice' SIZE (how many merge lines
+                    # its USING), then add the START location of the NEW
+                    # hunk (using SCREEN numbering is OK because) ....
+                    set S [expr {int([$w(mergeText) index mark$prvHid]) \
+                                + [diff-size $prvHid $g(merge$prvHid)]  \
+                                + [lindex $g(scrInf,$hID) 0] - 1}]
+                    # ... by getting the screen END Lnum of the PRIOR hunk,
+                    set O [lindex $g(scrInf,$prvHid) 1]
+                    # it will convert into the INTERVENING line count
+                } else { foreach {S na na O} $g(scrInf,$hID) {break} }
+
+                # Set the NEW mark (and eventually fall thru to tagging)
+                $w(mergeText) mark set mark$hID [incr S -$O].0
+                $w(mergeText) mark gravity mark$hID left
+            }
+        }
+    } else { ;# Do the entire Text (MUST BE in PURE LEFT content!!)
+        foreach hID [set hIDS $g(diff)] {
+            foreach {S na na O} $g(scrInf,$hID) {break}
+
+            $w(mergeText) mark set mark$hID [incr S -$O].0
+            $w(mergeText) mark gravity mark$hID left
+        }
     }
 
-    # ... then select the initial set of merged lines
-    foreach hID $g(diff) {
+    # ... finally, TAG the regions AND select the merge CHOICES for each
+    set currdiff [hunk-id $g(pos)]
+    foreach hID $hIDS {
 
         # Tag and/or Insert designated Left or Right window text versions
-        # N.B.: works PROVIDED the merge window STARTED as a 'Left' copy
+        # N.B.: works PROVIDED the merge hID range is IN a "Left copy" state
         if {$g(merge$hID) == 1} {
             # (But dont do a Left 'a'-type hunk - it's not visible)
             if {![string match "*a*" "$hID"]} {
                 add-tag $w(mergeText) difftag {} mark$hID "+[diff-size $hID 1]"
             }
-        } else { merge-select-version $hID 1 2 }
+        } else { merge-select-version $hID 1 $g(merge$hID) }
 
-        # Also attach "currtag" when correct hunk encountered
-        if {"$hID" == "[hunk-id $g(pos)]"} {
+        # Also attach "currtag" if/when correct hunk encountered
+        if {"$hID" == "$currdiff"} {
             add-tag $w(mergeText) currtag {} \
                                      mark$hID "+[diff-size $hID $g(merge$hID)]"
         }
@@ -4723,13 +4802,38 @@ proc merge-select-version {hID oldversion newversion} {
         }
     }
 
-    # Insert AND tag it
+    # Normally (prior to Combine/Split) mark$hID would ALWAYS have been the
+    # sole Left-'gravitized' Text mark (attached to the newline ending the
+    # NON-hunk line PRECEEDING the hunk start edge) at any ONE Text position.
+    #   But since then, MULTIPLE marks (referring to optionally merge-able
+    # abutted hunks) CAN COINCIDE, possibly only for a moment (between the
+    # deletion and add done in this proc), thus causing them to cluster to the
+    # front of ALL the possibilities - despite the need for SOME of those
+    # choices to logically FOLLOW the insertion being made (to maintain linear
+    # order).
+    #   Thus we must analyze EVERY insertion for such clustering and POSSIBLY
+    # adjust the gravities of SOME to ensure the hunk ordering linearity
+    # imposed by g(diff) remains intact...
+    set pos [hunk-ndx $hID]
+    set regravitize {}
+    foreach {na markID na} [$w(mergeText) dump -mark mark$hID] {
+        if {[hunk-ndx [string range $markID 4 end]] > $pos} {
+            $w(mergeText) mark gravity $markID right
+            lappend regravitize $markID
+        }
+    }
+
+    # NOW we can insert AND tag it
     $w(mergeText) configure -state normal
     $w(mergeText) insert mark$hID $newtext difftag
     $w(mergeText) configure -state disabled
     if {"$hID" == "[hunk-id $g(pos)]"} {
         add-tag $w(mergeText) currtag {} mark$hID "+$newlines"
     }
+
+    # ... Nevertheless, we always LEAVE all gravities as 'Left' AFTER the
+    # insertion, just so we need not guess (or ask) the next time around.
+    foreach {markID} $regravitize { $w(mergeText) mark gravity $markID left }
 }
 
 ###############################################################################
@@ -4825,7 +4929,7 @@ proc add-tag {wgt tag line start end} {
     global g
 
     if {"$line" eq {}} {
-        # unwind the shorthand notation allowed for line tagging
+        # interpret OUR shorthand notation allowed for line tagging
         if {[string match \[0-9\]* "$start"]} {append start ".0"}
         if {[string match \[0-9\]* "$end"]} {append end ".0"}
         # (+/-)any is "start (+/-)any lines"; any is "any +1 lines"
@@ -4958,8 +5062,7 @@ proc map-seek {y} {
 
 ###############################################################################
 # Move the "current" diff indicator (i.e. go to the next or previous diff
-# region if "relative" is 1; go to an absolute diff number if "relative"
-# is 0).
+# region if "relative" is 1; go to an absolute diff number if "relative" is 0).
 ###############################################################################
 proc move {value {relative 1} {setpos 1}} {
     debug-info "move ($value $relative $setpos)"
@@ -4998,6 +5101,9 @@ proc move {value {relative 1} {setpos 1}} {
 
 }
 
+###############################################################################
+# Align the availability of UI elements to the tools CURRENT context conditions
+###############################################################################
 proc update-display {} {
     debug-info "update-display ()"
     global g
@@ -5006,11 +5112,28 @@ proc update-display {} {
     #debug-info "  init_OK $g(initOK)"
     #debug-info "  startPhase $g(startPhase)"
     #if {!$g(startPhase)} return
+    # The coding approach here is somewhat unusual:
+    #	It's organized as sequential LAYERS of decisions instead of a single
+    #	TREE of chained tests to arrive at each items proper '-state' setting.
+    #
+    #	To limit "flickering" of widgets, that choice of LAYER is critical.
+    #
+    #	Its best to try avoiding toggling the same widget from multiple layers,
+    #	particularly as "else" clauses, only to nearly ALWAYS redo it at a
+    #	LOWER layer. Think about the frequency that each layer-test is most
+    #	likely to branch during general operation of the tool.
+    #
+    #	This works (and results in fewer code lines) - but its confusing to
+    #	assess WHERE (which layer) any given widget BELONGS at and if it
+    #	NEEDS to be repeated at MULTIPLE levels
+
+    ##### First layer - Does the tool have enough input to attempt a diff ?
     if {!$g(initOK)} {
         # disable darn near everything
 
-        foreach b [list rediff find prevDiff firstDiff nextDiff lastDiff \
-          centerDiffs mergeChoice1 mergeChoice2 mergeChoice12 mergeChoice21] {
+        foreach b [list rediff splitDiff cmbinDiff find \
+                   prevDiff firstDiff nextDiff lastDiff centerDiffs \
+                   mergeChoice1 mergeChoice2 mergeChoice12 mergeChoice21] {
             $w(${b}_im) configure -state disabled
             $w(${b}_tx) configure -state disabled
         }
@@ -5039,21 +5162,18 @@ proc update-display {} {
         $w(markMenu) entryconfigure "Clear*" -state disabled
 
     } else {
-        # these are always enabled, assuming we have properly
-        # diffed a couple of files
+        # these are generally enabled, assuming we have (or about to)
+        # run a proper DIFF of a couple of files
+        foreach b [list rediff find prevDiff firstDiff nextDiff lastDiff \
+                   centerDiffs mergeChoice1 mergeChoice2 mergeChoice12   \
+                   mergeChoice21] {
+            $w(${b}_im) configure -state normal
+            $w(${b}_tx) configure -state normal
+        }
+
         $w(popupMenu) entryconfigure "Find..." -state normal
         $w(popupMenu) entryconfigure "Find Nearest*" -state normal
         $w(popupMenu) entryconfigure "Edit*" -state normal
-
-        foreach b [list rediff find prevDiff firstDiff nextDiff lastDiff \
-          centerDiffs] {
-            $w(${b}_im) configure -state normal
-            $w(${b}_tx) configure -state normal
-        }
-        foreach b [list mergeChoice1 mergeChoice2 mergeChoice12 mergeChoice21] {
-            $w(${b}_im) configure -state normal
-            $w(${b}_tx) configure -state normal
-        }
 
         $w(editMenu) entryconfigure "Find*" -state normal
         $w(editMenu) entryconfigure "Edit File 1" -state normal
@@ -5065,9 +5185,6 @@ proc update-display {} {
         $w(mergeMenu) entryconfigure "Show*" -state normal
         $w(mergeMenu) entryconfigure "Write*" -state normal
 
-        $w(find_im) configure -state normal
-        $w(find_tx) configure -state normal
-
         # Hmmm.... on my Mac the combobox flashes if we don't add this
         # check. Is this a bug in AquaTk, or in my combobox... :-|
         if {[$w(combo) cget -state] != "normal"} {
@@ -5075,34 +5192,69 @@ proc update-display {} {
         }
     }
 
-    # Update the toggles.
-    if {$g(count)} {
-        set g(toggle) $g(merge[hunk-id $g(pos)])
-    }
-
     # update the status line
     set g(statusCurrent) "$g(pos) of $g(count)"
     show-status $g(statusCurrent)
 
-    # update the combobox. We don't want its command to fire, so
-    # we'll disable it temporarily
-    $w(combo) configure -commandstate "disabled"
-    set i [expr {$g(pos) - 1}]
-    $w(combo) configure -value [lindex [$w(combo) list get 0 end] $i]
-    $w(combo) selection clear
-    $w(combo) configure -commandstate "normal"
+    ##### Second layer - Do any diffs exist ? <implies a REAL g(pos)>
+    #
+    # Update the combobox, merge choices, and hunk centering.
+    if {$g(count)} {
+        # update the combobox. We don't want its command to fire, so
+        # we'll disable it temporarily
+        $w(combo) configure -commandstate "disabled"
+        set i [expr {$g(pos) - 1}]
+        $w(combo) configure -value [lindex [$w(combo) list get 0 end] $i]
+        $w(combo) selection clear
+        $w(combo) configure -commandstate "normal"
 
-    # update the widgets
+        # Merge choices and hunk centering
+        foreach buttonpref {im tx} {
+            $w(centerDiffs_$buttonpref) configure -state normal
+            $w(mergeChoice1_$buttonpref) configure -state normal
+            $w(mergeChoice2_$buttonpref) configure -state normal
+            $w(mergeChoice12_$buttonpref) configure -state normal
+            $w(mergeChoice21_$buttonpref) configure -state normal
+        }
+        catch { $w(mergeChoiceLabel) configure -state normal }
+
+        $w(popupMenu) entryconfigure "Center*" -state normal
+        $w(viewMenu) entryconfigure "Center*" -state normal
+
+    } else {
+    	# Note: this is essentially for the "No-Diffs-found" case
+        #   and effectively suggests that Layer 4 will do NOTHING!
+        foreach b [list splitDiff cmbinDiff centerDiffs markClear markSet \
+                   mergeChoice1 mergeChoice2 mergeChoice12 mergeChoice21] {
+            $w(${b}_im) configure -state disabled
+            $w(${b}_tx) configure -state disabled
+        }
+        catch { $w(mergeChoiceLabel) configure -state disabled }
+
+        $w(popupMenu) entryconfigure "Center*" -state disabled
+        $w(viewMenu) entryconfigure "Center*" -state disabled
+        $w(editMenu) entryconfigure "Split*" -state disabled
+        $w(editMenu) entryconfigure "Combine*" -state disabled
+        $w(markMenu) entryconfigure "Mark*" -state disabled
+        $w(markMenu) entryconfigure "Clear*" -state disabled
+    }
+
+    ##### Third layer - is CDR at (or beyond) edges of its valid range ?
+    #   (N.B> also applies to the legitimate "No Diffs Found" situation)
+    #
+    # Update navigation items
     if {$g(pos) <= 1} {
         foreach buttonpref {im tx} {
             $w(prevDiff_$buttonpref) configure -state disabled
             $w(firstDiff_$buttonpref) configure -state disabled
         }
+
         $w(popupMenu) entryconfigure "Previous*" -state disabled
         $w(popupMenu) entryconfigure "First*" -state disabled
         $w(viewMenu) entryconfigure "Previous*" -state disabled
         $w(viewMenu) entryconfigure "First*" -state disabled
-    } else {
+
+    } else {	;# can transition lower
         foreach buttonpref {im tx} {
             $w(prevDiff_$buttonpref) configure -state normal
             $w(firstDiff_$buttonpref) configure -state normal
@@ -5122,7 +5274,7 @@ proc update-display {} {
         $w(popupMenu) entryconfigure "Last*" -state disabled
         $w(viewMenu) entryconfigure "Next*" -state disabled
         $w(viewMenu) entryconfigure "Last*" -state disabled
-    } else {
+    } else {	;# can transition higher
         foreach buttonpref {im tx} {
             $w(nextDiff_$buttonpref) configure -state normal
             $w(lastDiff_$buttonpref) configure -state normal
@@ -5133,58 +5285,39 @@ proc update-display {} {
         $w(viewMenu) entryconfigure "Last*" -state normal
     }
 
+    ##### Fourth layer - is the specific CDR encumbered in some way
+    # (thus g(pos) MUST have a legitimate value)
+    #
+    # Update availability of bookmarking and Split/Combine actions
+    # AND the specific merge-choice selected
     if {$g(count) > 0} {
-        $w(popupMenu) entryconfigure "Center*" -state normal
-        $w(viewMenu) entryconfigure "Center*" -state normal
-        $w(markMenu) entryconfigure "Mark*" -state normal
 
+        # Show which merge option is current for this CDR
+        set g(toggle) $g(merge[set hID [hunk-id $g(pos)]])
+
+        # Bookmark (S)et and (C)lear items depend on the CDR marker
+        # existance and are ALWAYS in opposite states to each other
+        if {[winfo exists $w(toolbar).mark$hID]} \
+            { set tmp {C S} }   { set tmp {S C} }
+        foreach $tmp {normal disabled} { }
         foreach buttonpref {im tx} {
-            $w(centerDiffs_$buttonpref) configure -state normal
-            $w(mergeChoice1_$buttonpref) configure -state normal
-            $w(mergeChoice2_$buttonpref) configure -state normal
-            $w(mergeChoice12_$buttonpref) configure -state normal
-            $w(mergeChoice21_$buttonpref) configure -state normal
+            $w(markClear_$buttonpref) configure -state $C
+            $w(markSet_$buttonpref) configure -state $S
         }
-        catch { $w(mergeChoiceLabel) configure -state normal }
 
-        # the mark clear button should only be enabled if there is
-        # presently a mark at the current diff record
-        set widget $w(toolbar).mark[hunk-id $g(pos)]
-        if {[winfo exists $widget]} {
-            $w(markMenu) entryconfigure "Clear*" -state normal
-            $w(markMenu) entryconfigure "Mark*" -state disabled
-            foreach buttonpref {im tx} {
-                $w(markClear_$buttonpref) configure -state normal
-                $w(markSet_$buttonpref) configure -state disabled
+        $w(markMenu) entryconfigure "Clear*" -state $C
+        $w(markMenu) entryconfigure "Mark*" -state $S
+
+        # (S)plit/(C)ombine each have specific condition checks
+        set S [expr {[splcmb-chk split $g(pos)] ? "normal" : "disabled"}]
+        set C [expr {[splcmb-chk cmbin $g(pos)] ? "normal" : "disabled"}]
+        foreach buttonpref {im tx} {
+                $w(splitDiff_$buttonpref) configure -state $S
+                $w(cmbinDiff_$buttonpref) configure -state $C
             }
-        } else {
-            $w(markMenu) entryconfigure "Clear*" -state disabled
-            $w(markMenu) entryconfigure "Mark*" -state normal
-            foreach buttonpref {im tx} {
-                $w(markClear_$buttonpref) configure -state disabled
-                $w(markSet_$buttonpref) configure -state normal
-            }
-        }
 
-    } else {
-        foreach buttonpref {im tx} {
-            $w(centerDiffs_$buttonpref) configure -state disabled
-            $w(mergeChoice1_$buttonpref) configure -state disabled
-            $w(mergeChoice2_$buttonpref) configure -state disabled
-            $w(mergeChoice12_$buttonpref) configure -state disabled
-            $w(mergeChoice21_$buttonpref) configure -state disabled
-        }
-        catch { $w(mergeChoiceLabel) configure -state disabled }
-        $w(popupMenu) entryconfigure "Center*" -state disabled
-        $w(viewMenu) entryconfigure "Center*" -state disabled
-
-        $w(markMenu) entryconfigure "Mark*" -state disabled
-        $w(markMenu) entryconfigure "Clear*" -state disabled
-
-        foreach buttonpref {im tx} {
-            $w(markClear_$buttonpref) configure -state disabled
-            $w(markSet_$buttonpref) configure -state disabled
-        }
+        $w(editMenu) entryconfigure "Split*" -state $S
+        $w(editMenu) entryconfigure "Combine*" -state $C
     }
 }
 
@@ -5252,6 +5385,13 @@ proc wipe {} {
     set g(count) 0
     set g(diff) ""
     set g(currdiff) ""
+    # N.B: It is critical that hID-related datums, particularly those that use
+    # their EXISTANCE as the basis for internal decision making, be REMOVED
+    # when attempting to "start over" to avoid seemingly random errors.
+    array unset g {scrInf,[0-9]*}
+    array unset g {overlap[0-9]*}
+    array unset g {merge[0-9]*}
+    array unset g {diff3[rl]*}
 
     set g(startPhase) 1
 }
@@ -5296,36 +5436,105 @@ proc wipe-window {} {
 ###############################################################################
 # Mark difference regions and build up the combobox
 ###############################################################################
-proc mark-diffs {} {
+proc mark-diffs {{rmvrpl {}}} {
+    global opts w g
     debug-info "mark-diffs ()"
-    global opts
-    global g
-    global w
 
-    # Ain't this clever? We want to update the display as soon as we've marked
-    # enough diffs to fill the display so the user will have the impression
-    # we're fast. But, we don't want this code to slow us down too much, so
-    # we'll put the code in a variable and delete it when its no longer needed.
-    set hack {
-        # for now, just pick a number out of thin air. Ideally
-        # we'd compute the number of lines that are visible and
-        # use that, but I'm too lazy today...
-        if {$g(count) > 25} {
-            update idletasks
-            set hack {}    ;# once it has fired, dont bother doing it again
+    set wdg(1) $w(LeftText)
+    set wdg(2) $w(RightText)
+    set g(count) [set boxW [set delta(1) [set delta(2) [set i  0]]]]
+
+    # Distinguishing between EDITTING .vs. LOADING of the global diff hunk
+    # list is defined by the OPTIONAL "(r)e(m)o(v)e and (r)e(pl)ace" argument
+    if {$rmvrpl != {}} {
+        set Lpad [set Rpad {}]      ;# (tmps for scheduling Pad-line removal)
+        set hack {}                 ;# Dont need the responsiveness hack ...
+        set g(startPhase) 1         ;# ... but RE-suspend "plot-line-info"
+        $w(combo) list delete 0 end ;# ComboBox will simply be RE-loaded
+
+        # Next do the REMOVEs of hunks from the diff list FIRST (including all
+        # that depends on them) ... REPLACing with the NEW hunks before return.
+        #   This mostly works because the entries being removed occupy the
+        #   SAME SINGLE contiguous run as the entries taking their place.
+        # Happily, Tcl ALLOWS modifying a list ACTIVELY being processed!!
+        foreach d $g(diff) {
+            if {[set ndx [lsearch -exact $rmvrpl $d]] >= 0} {
+                if {![info exists inject]} {set inject $i} ;# 1st delete
+
+                # Only ONE side ever has Pad lines - remove them
+                foreach {na E Pl na na Pr} $g(scrInf,$d) {break}
+                set S [incr E] ;# (shift range downward for Widget addressing)
+                if {$Pl} {lappend Lpad [incr S -$Pl].0 $E.0} ;# Left  Padding
+                if {$Pr} {lappend Rpad [incr S -$Pr].0 $E.0} ;# Right Padding
+
+                $w(LeftText)  mark unset vL$d ;# Left Vertical-Linearity
+                $w(LeftText)  tag delete vL$d ;# Left Vertical-Linearity
+                $w(RightText) mark unset vL$d ;#Right Vertical-Linearity
+                $w(RightText) tag delete vL$d ;#Right Vertical-Linearity
+
+                diffmark clear [set j [incr i]] ;# Eliminate bookmark (if any)
+                merge-add-marks [list $d]        ;# ... and its Merge data
+
+                unset -nocomplain g(inline,$d) ;# inline diffs
+                unset -nocomplain g(overlap$d) ;# 3way diff collision
+                unset g(scrInf,$d) ;# line numbering information
+
+                # Now that everything is gone, remove the hID from $rmvrpl
+                set rmvrpl  [lreplace $rmvrpl $ndx $ndx]
+            } else {incr i} ;# a running count we can grab at 1st delete
+        }
+        # Must eliminate Padding all at once to avoid shifting the indices
+        if {[llength $Lpad]} {eval $w(LeftText)  delete $Lpad}
+        if {[llength $Rpad]} {eval $w(RightText) delete $Rpad}
+
+        # ... and finally inject the NEW hIDs REPLACING what was deleted
+        # N.B> 'j' was saved as a "count" value - reduce it BACK to an INDEX
+        set g(diff) [lreplace $g(diff) $inject [incr j -1] {*}$rmvrpl]
+
+    } else {
+        # Ain't this clever? We want to update the display as soon as we've
+        # marked enough diffs to fill the display so the user will have the
+        # impression we're fast. But, to prevent it from slowing us down too
+        # much, put this code in a variable and delete it AFTER it fires once
+        set hack {
+            # for now, just pick a number out of thin air. Ideally
+            # we'd compute the number of lines that are visible and
+            # use that, but I'm too lazy today...
+            if {$g(count) > 25} {
+                update idletasks
+                set hack {}    ;# once fired, dont bother doing it again
+            }
         }
     }
 
-    # conserve spacing in formatting the combobox data
+    # Compute minimal spacing to format the combobox entry numbering
     set fmtW [string length "[llength "$g(diff)"]"]
 
-    # Walk through each diff hunk deriving global datums for eventual use
-    set g(count) [set boxW [set delta(1) [set delta(2) 0]]]
-    set wdg(1) $w(LeftText)
-    set wdg(2) $w(RightText)
+    # Walk through each diff hunk DERIVING global data for eventual use
     foreach d $g(diff) {
 
-        if { [set result [extract $d]] != ""} {
+        # If its Info ALREADY exists, we are obviously in EDIT mode, needing
+        # primarily to keep the 'delta(*)'s updated AND (re)add into comboBox
+        if {[info exists g(scrInf,$d)]} {
+            # Remember to count this hunk
+            set result [incr g(count)]
+            #  (simply making 'result' be non-null permits adding to comboBox)
+
+            # However, EXISTING hunks PAST the injected entries also likely
+            # will need some minor realignments:
+            foreach {S E Pl na Cl Pr na Cr} $g(scrInf,$d) {break}
+            #   a) "scrInf,*" Ofst fields MUST be rewritten to the NEW deltas
+            #   b) bookmarked hunks likely need their labels renumbered
+            if {$inject < $g(count)} {
+                set g(scrInf,$d) \
+                              [list $S $E $Pl $delta(1) $Cl $Pr $delta(2) $Cr]
+                diffmark $d $g(count)
+            }
+            incr delta(1) $Pl  ;# Keep the deltas CURRENT for EVERY hunk
+            incr delta(2) $Pr
+
+        } elseif { [set result [extract $d]] != ""} {
+        # Otherwise, its a NEW hunk needing to be processed
             incr g(count)
 
             foreach {s(1) e(1) s(2) e(2) type} "$result" { }
@@ -5339,11 +5548,11 @@ proc mark-diffs {} {
                         set g(merge$d) 2 ;# Preferred 3way merge choice
                         for {set j $s(1)} {$j <= $e(1)} {incr j} {
                             if {[info exists g(diff3l$j)]} {
-                                set g(overlap[hunk-id $g(count)]) 1 ;# Collision
+                                set g(overlap$d) 1     ;# Collision
                                 break
                             }
-                        }
-                        break ;# did/cant FIND collision - stop looking
+                        } ;# If already FOUND collision - stop looking
+                        if {[info exists g(overlap$d)]} {break}
                     } else { set g(merge$d) 1 } ;# Default to Left when NO '3r'
                 }
             } else { set g(merge$d) 1 } ;# Default to Left when NO 3way at all
@@ -5380,8 +5589,8 @@ proc mark-diffs {} {
                 }
             "c" {   ;# a 'change' pads to the SHORTER widget
                     set i [expr {$siz(1) < $siz(2) ? 1 : 2}]
-                    set pad($i) [expr {abs([incr siz(1)]-[incr siz(2)])}]
-                    if {[info exists g(overlap[hunk-id $g(count)]) ]} {
+                    set pad($i) [expr {abs([incr siz(1)] - [incr siz(2)])}]
+                    if {[info exists g(overlap$d)]} {
                         set chgbar(1) [set chgbar(2) "?"] ;# (3way overlap)
                     } else {
                         set chgbar(1) [set chgbar(2) "!"] ;#  (just a chg)
@@ -5416,7 +5625,7 @@ proc mark-diffs {} {
             # WHERE to place the vertical linearity TAG (vL*) later when tagging
             # hunks AFTER any user pref changes (which MIGHT mention fonts).
             #
-            #       The vL* TAG helps ensure each L/R hunk pairing remains the
+            #       The vL* TAG will ensure each L/R hunk pairing remains the
             #       same PHYSICAL height in BOTH Text widgets, PROVIDING a L/R
             #       alignment of MOST lines, diminishing the scrolling skew
             #       introduced by TK Vrsn(>= 8.5) "display .vs. logical" lines.
@@ -5441,19 +5650,28 @@ proc mark-diffs {} {
                     incr s(1) ;# (warned you this value could be trashed)
                 }
             }
+        }
 
-            # Put entry in combobox (measure it) and TRY to update display ASAP
+        # Append entry into combobox
+        if {"$result" != ""} {
             $w(combo) list insert end \
                              "[set item [format "%*d: %s" $fmtW $g(count) $d]]"
+            # measure it, remembering the LONGEST entry seen ...
             set boxW [max $boxW [string length "$item"]]
-            eval $hack
+
+            eval $hack ;# ... and TRY to update display ASAP
         }
     }
 
     # Shrinkwrap combobox TO its data (avoids clipping AND excess space)
-    #  (N.B: decrement of 2 ??appears?? to be an artifact of combobox)
-    if {$g(count)} { $w(combo) configure -width [incr boxW -2]}
+    #  (N.B> decrement of 2 ??appears?? to be an artifact of combobox font?)
+    #  (or perhaps spacing STOLEN from the width for the pulldown button?)
+    if {$g(count)} { $w(combo) configure -width [incr boxW -2] }
 
+    # If any hIDs were REPLACED - NOW is the time to update the merge window
+    if {[llength $rmvrpl]} {merge-add-marks $rmvrpl}
+
+    # Lastly go (re-)TAG it all
     remark-diffs
     return $g(count)
 }
@@ -5484,10 +5702,6 @@ proc do-new-diff {} {
         { debug-info "    $inf: $finfo($inf)" }
 
     set g(disableSyncing) 1 ;# turn off syncing until things settle down
-
-    # remove all evidence of previous diff
-    #wipe-window
-    #update idletasks
 
     watch-cursor
     # do the diff
@@ -5653,16 +5867,8 @@ proc rediff {} {
     set g(lnumDigits) 0
     set i [expr $finfo(fpairnum) * 2 - 1]
     set j [expr $i + 1]
-    foreach mod [list $i $j] {
-         if {$mod % 2 == 1} {
-            set txtw 1
-            set w($txtw) $w(LeftText)
-        } else {
-            set txtw 2
-            set w($txtw) $w(RightText)
-        }
+    foreach {txtw mod} [list LeftText $i RightText $j] {
         show-status "reading $finfo(pth,$mod)..."
-
         if {[catch {set hndl [open "$finfo(pth,$mod)" r]}]} {
             fatal-error "Failed to open file: $finfo(pth,$mod)"
         }
@@ -6000,6 +6206,7 @@ proc main {} {
             update
         }
     }
+    reconfigure-toolbar ;# which MAY have tried to set w(selcolor)
 
     if {! $cmd_empty} {
         do-diff
@@ -6351,6 +6558,589 @@ proc newDiffBrowse {title widget} {
 }
 
 ###############################################################################
+# Split or Combine Dialog (modal): adjust CDR bounds & form EQUIVALENT diff(s)
+###############################################################################
+proc splcmb-Dialog {Combine} {
+    global splcmb opts g w
+
+    # (If first time invoked) ... Construct the Dialog window itself)
+    if {! [winfo exists $w(scDialog)]} {
+        # Encode the addressable slots/labels for loading into a 5x3 grid:
+        set row(u)  [set col(l) 0]     ;# Upper row  (or)  Left col-pair(0&1)
+        set row(l)              2      ;# Lower row
+        set col(r)              3      ;# Right col-pair(3&4)
+        set lbl(l)  "Left Side"        ;# (both SIDE labels go in row 1)
+        set lbl(r)  "Right Side"       ;#
+        set lbl(lu) "Upper Edge"       ;# (both EDGE labels go in col 2)
+        set lbl(ll) "Lower Edge"       ;#
+        #   (Button columns are designed as VERTICALLY-OPPOSED pairings)
+        foreach {col(luu) col(lld)   col(lud) col(llu)   col(rud) col(rlu) \
+                 col(ruu) col(rld) }     { 0 0  1 1  3 3  4 4}     { }
+
+        # Now start building the dialog
+        toplevel $w(scDialog)
+        label $w(scDialog).msg ;# Message content will be supplied later
+        if {$g(windowingSystem) == "aqua"} {
+            setAquaDialogStyle $w(scDialog)
+        }
+        pack $w(scDialog).msg -side top -padx 4 -pady 4
+
+        # Populate the 5x3 grid (logically 3x3, but outer cols span 2 each)
+        frame [set BtnFr $w(scDialog).btn] -relief groove -padx 4 -pady 4
+        foreach LR {l r} {      ;# Left Right    SIDE > collectively forms
+          foreach UL {u l} {    ;# Upper Lower   EDGE > widget names & args
+            foreach DU {d u} {  ;# Down Up	 BUTN >  to "splcmb-adj"
+              set nm "."
+              button ${BtnFr}[append nm $LR $UL $DU] -image arroW$DU \
+                  -command [list splcmb-adj $LR $UL $DU]
+          ### Huh? this was INTENDED to make btn image disappear when disabled
+          #   Instead it just stipples the original buttonface image. Why??
+          ### ${BtnFr}$nm configure -disabledf [${BtnFr}$nm cget -bg]
+              grid ${BtnFr}$nm -row $row($UL) -column $col(${LR}${UL}$DU)
+            }
+            if {[info exists lbl(${LR}$UL)]} {                  ;# Edge label
+              label ${BtnFr}[set nm .lB${LR}$UL] -text "$lbl(${LR}$UL)"
+              grid  ${BtnFr}$nm -row $row($UL) -column 2
+            }
+          }
+          label ${BtnFr}[set nm .lB$LR] -text "$lbl($LR)"   ;# Side label
+          grid ${BtnFr}$nm -row 1 -column $col($LR) -columnspan 2
+        }
+        pack $BtnFr -side top -padx 4 -pady 4
+
+        # Set up to signal 'tkwait ::scDialogRet' when user has completed task
+        button $w(scDialog).done -command {set scDialogRet 1} ;# -text later
+        button $w(scDialog).cncl -command {set scDialogRet 0} -text "Cancel"
+        pack $w(scDialog).done $w(scDialog).cncl -pady 4 -side left -expand yes
+        set ::scDialogRet 0 ;# (N.B> make certain this exists)
+
+        # Tell window manager who we are and not to initially display us
+        wm title $w(scDialog) "Adjust Diff Bounds"
+        wm withdraw $w(scDialog)
+
+        # (Should put this definition somewhere more global for use elsewhere)
+        bind modalDialog <ButtonPress> {wm deiconify %W ; raise %W}
+
+        # Ensure dialog can be RAISED during its modal-grab if hidden
+        # and arrange to simply 'Cancel' if closed by the window manager
+        bindtags $w(scDialog) [linsert [bindtags $w(scDialog)] 0 modalDialog]
+        wm protocol $w(scDialog) WM_DELETE_WINDOW  {$w(scDialog).cncl invoke}
+    } { set BtnFr $w(scDialog).btn }
+    set oldFocus [focus] ;# (just hang on to this to restore afterward)
+
+    # # # # # # # # # # # # # # # # # # # # #
+    # Re-configure Dialog contents for PRESENT usage
+    #   Some settings MAY depend on whether mode is "Split" .vs. "Combine"
+    if {$Combine} {
+        $w(scDialog).done configure -text "Combine"
+        $w(scDialog).msg configure -text \
+                             "Use buttons to EXPAND the current diff region"
+        foreach {inward outward} {disable normal} { } ;# cmbin btns init state
+    } else {
+        $w(scDialog).done configure -text "Split"
+        $w(scDialog).msg configure -text \
+                             "Use buttons to REDUCE the current diff region"
+        foreach {inward outward} {normal disable} { } ;# split btns init state
+    }
+    foreach {b} {luu ruu lld rld} {$BtnFr.$b configure -state $outward}
+    foreach {b} {lud rud llu rlu} {$BtnFr.$b configure -state $inward}
+
+    # Identify the target CDR, its Line info (and extract its type)
+    foreach {S E Pl Ol na Pr Or} $g(scrInf,[set hID [hunk-id $g(pos)]]) {break}
+    regexp {[0-9,]*([acd])[0-9,]*} $hID na CDRtyp
+
+    # # # # # # # # # # # # # # # # # # # # #
+    # Next, establish the 'working set' of data (global splcmb array entries)
+    # Start fresh by flushing any old data and recording the CDR info and ID
+    unset -nocomplain splcmb
+    set splcmb(rnge) [list [list $S $E $Pl $Ol $Pr $Or $hID]]
+ 
+    # Also initialize the 'Pad'-lines "jump" table for EACH side
+    #   A jump table records pairs of line numbers that correspond to the top
+    #   and bottom of a contiguous run of "Pad" lines IN a splcmb(rnge) entry.
+    #   Used later in "splcmb-adj" to *jump* past those lines when editting.
+    set splcmb(jl) [set splcmb(jr) {}]
+    if {$Pl} {set splcmb(jl) [list [expr {$E-$Pl+1}] $E]}
+    if {$Pr} {set splcmb(jr) [list [expr {$E-$Pr+1}] $E]}
+
+    # Hmm, 'Combine' requires a lttle more work -
+    if {$Combine} {
+        # Must RE-derive the ORIGINAL bounds of which this CDR is a SUBSET
+        #   (create some temps to work with)
+        set minpos [set maxpos $g(pos)]
+        set nS $S
+        set nE $E
+
+        # Now try to EXTEND those values OUTWARD as far as they can go
+        while {$minpos > 1} {
+            set nhID [hunk-id [incr minpos -1]]
+
+            if {$nS == [lindex $g(scrInf,$nhID) 1] + 1} {
+                # Subsume this hunk (it abuts the CDR leading edge)
+                foreach {nS tE tPl tOl na tPr tOr} $g(scrInf,$nhID) {break}
+                set splcmb(rnge) [linsert $splcmb(rnge) 0 \
+                                     [list $nS $tE $tPl $tOl $tPr $tOr $nhID]]
+                if {$tPl} {set splcmb(jl) [linsert $splcmb(jl) 0 \
+                                                  [expr {$tE-$tPl+1}] $tE]}
+                if {$tPr} {set splcmb(jr) [linsert $splcmb(jr) 0 \
+                                                  [expr {$tE-$tPr+1}] $tE]}
+            } else { break }
+        }
+
+        while {$maxpos < $g(count)} {
+            set nhID [hunk-id [incr maxpos]]
+
+            if {$nE == [lindex $g(scrInf,$nhID) 0] - 1} {
+                # Subsume this hunk (it abuts the CDR trailing edge)
+                foreach {tS nE tPl tOl na tPr tOr} $g(scrInf,$nhID) {break}
+                lappend splcmb(rnge)  [list $tS $nE $tPl $tOl $tPr $tOr $nhID]
+                if {$tPl} {lappend splcmb(jl) [expr {$nE-$tPl+1}] $nE}
+                if {$tPr} {lappend splcmb(jr) [expr {$nE-$tPr+1}] $nE}
+            } else { break }
+        }
+        # splcmb(rnge) now has an ORDERED list of possibly involved hunks;
+        # and ORDERED splcmb(jr/jl) lists - ie. ALL its "jump table" info.
+        # ALSO 'nS' and 'nE' now have the OUTERMOST encompassing EDGE values
+    } else { set nS $S ; set nE $E }
+
+    # Further adjust the "Combine"-mode buttons if CDR is AT either edge of
+    #      the rnge (ie. already sitting at an exterior limit) ... 
+    # -OR- further adjust the "Split"-mode buttons if its an "a/d"-type CDR to
+    #      disallow adjustment to the ALL "Pad" lines side  (its pointless).
+    set btns {} ;# Note: default is that NEITHER adjustment will be required
+    if {$Combine} {
+        if {$S == $nS} {set btns {luu ruu} }
+        if {$E == $nE} {set btns {lld rld} }
+    } elseif {"$CDRtyp" == "a" || "$CDRtyp" == "d"} {
+        if {$Pl} {set btns {lud llu} }
+        if {$Pr} {set btns {rud rlu} }
+    }
+    if {[llength $btns]} {foreach b $btns {$BtnFr.$b configure -state disable}}
+
+    # Construct the (user modifiable) 'working set' of the PRESENT CDR edges
+    #   (semantic indices refer to   SIDE and EDGE   pairings)
+    # Note that the RELATIONSHIP of these MOVABLE edges to the 'hard limit'
+    # EDGES (defined next) WILL DEPEND on the "Split" .vs. "Combine" mode
+    foreach {splcmb(lu) splcmb(ll) splcmb(ru) splcmb(rl)}  "$S $E $S $E"  { }
+    incr splcmb(ll)  ;# Txt-wdg require 'lower' edge specs be 1 lower
+    incr splcmb(rl)
+
+    # Next, a (static) set of 'hard limits' semantically BRACKETING the edges
+    #   This semantic is an ['i'nner/'o'uter -plus- 'u'pper/'l'ower] concept
+    #   describing where any given BTN (and its implied EDGE) is HEADING to.
+    #       NOTE: this will LATER REQUIRE a mode-specific reverse-mapping
+    #   conversion (in "splcmb-adj") that can mirror the distinct edge VALUE
+    #   REARRANGEMENT being done here (would've been easy if Tcl had pointers!)
+    foreach {splcmb(ou) splcmb(iu) splcmb(il) splcmb(ol)} "$nS $S $E $nE" { }
+    incr splcmb(ol)  ;# As before, lower bnds must be BELOW range (for Txt-wdg)
+    incr splcmb(il)
+    
+    # Last config step - setup for the Txt-wdg tagging, ensuring visibility...
+    foreach wdg "$w(LeftText) $w(RightText)" {
+        $wdg  tag configure scCDR -background $opts(adjcdr)
+        $wdg  tag configure scADD -background $opts(mapins)
+        $wdg  tag configure scCHG -background $opts(mapchg)
+        $wdg  tag configure scDEL -background $opts(mapdel)
+        $wdg  see $S.0 ;# N.B> grab will BLOCK scrolling: becomes OUR problem
+    }
+    # ... and now 'paint' the CURRENT (starting) state for the user.
+    #   (Note: this ALSO *creates* datums describing the Split/Combine STATE)
+    splcmb-Feedback $Combine
+
+    # # # # # # # # # # # # # # # # # # # # #
+    # FINALLY ... Invoke the actual Dialog
+    wm deiconify $w(scDialog)			
+    catch {tkwait visibility $w(scDialog)}
+    catch {grab set $w(scDialog)}
+    tkwait variable ::scDialogRet
+    #
+    # # # # # # # # # # # # # # # # # # # # #
+    # wait here for the user to do their thing ... (tick, tick, tick)
+    # # # # # # # # # # # # # # # # # # # # #
+    #
+    # Continue processing, beginning with taking down the Dialog itself
+    grab release $w(scDialog)
+    focus $oldFocus
+    wm withdraw $w(scDialog)
+
+    # ELIMINATE all Dialog-overlaid-tagging in the Text widgets
+    foreach wdg "$w(LeftText) $w(RightText)" {
+        $wdg tag delete scADD scDEL scCHG scCDR
+    }
+
+    #splcmb-chk data	;# Formatted DEBUG output
+
+    # And BAIL-OUT if user Cancelled  -OR-  made no ACTUAL changes
+    #   (each movable edge is AT its original STARTING position)
+    if {!$::scDialogRet || \
+        ( ($splcmb(lu)==$splcmb(ru) && $splcmb(lu)==$S)   && \
+          ($splcmb(ll)==$splcmb(rl) && $splcmb(ll)==$E+1) )} {
+        return
+    }
+
+    # # # # # # # # # # # # # # # # # # # # #
+    # Interpret/process the users interaction
+    #
+
+    # Factor-out/realign the minor inconsistencies between Split and Combine
+    if {$Combine} {
+        # Among the hIDs within 'splcmb(rnge)', ignore ALL that the user has
+        # chosen to NOT coalesce any portion of BACK within the CDR boundary
+        #   (Remember: to discount the implicit +1 of lower EDGE values)
+        foreach {tS tE na tOl na tOr thID} [join $splcmb(rnge)] {
+            if {($splcmb(lu)   > $tE && $splcmb(ru)   > $tE) \
+            ||  ($splcmb(ll)-1 < $tS && $splcmb(rl)-1 < $tS)} {continue}
+
+            lappend rnge $thID
+
+            # Realign Numbering to FIRST involved hunk (to init LN(l/r) below)
+            if {[llength $rnge]==1}  { foreach {S Ol Or} "$tS $tOl $tOr" { } }
+
+            # Rewrite (promote) the CDR type UNLESS they will ALL agree
+            if {"$CDRtyp" != "c" && "$thID" != \
+                           [regexp -inline "\[0-9,]+$CDRtyp\[0-9,]+" $thID]} {
+                set CDRtyp "c"
+            }
+        }
+    } else { set rnge [list $hID] } ;# However, Split only involves the CDR
+
+    # Neither mode should EVER evaluate the 'Pad'-side of a "NON-chg" CDR
+    if {"$CDRtyp" == "a"} {set splcmb(l2) 0}
+    if {"$CDRtyp" == "d"} {set splcmb(r2) 0}
+
+    # (L)ine (N)umbering begins with values just PRIOR to first INVOLVED hunk
+    set LN(l) [expr {$S -$Ol -1}]
+    set LN(r) [expr {$S -$Or -1}]
+
+    # At the moment, 'rnge' is a list of the INVOLVED hIDs (to be deleted).
+    # Grab its count, to use later in ensuring g(pos) REMAINS a legal value
+    # when the hunks being deleted HAPPEN to be at the high end of g(diff).
+    set minpos [llength $rnge]
+
+    # Walk each region - forming any NEW "hID"s (into 'rnge') as we go
+    foreach rgn {1 2 3} { set NEWid {}
+        # Skip entire region if BOTH sides empty ...
+        if {!$splcmb(l$rgn) && !$splcmb(r$rgn)} { continue }
+
+        # ... otherwise process BOTH halves to construct the SINGLE new hID
+        # using a technique that roughly parallels what "mark-diffs" would do
+        #   Step through the (D)datum item (bounds and type) for each side
+        foreach LR {l r} {
+            if {$splcmb(${LR}$rgn)} {
+                foreach "bgn($LR) end($LR) typ" $splcmb(${LR}${rgn}D) {
+                    # factor out encompassed jump entries (if any)
+                    set i 0
+                    foreach {n1 n2} $splcmb(j$LR) {
+                        if {$bgn($LR) <= $n1 && $n2 <= $end($LR)} {
+                            set i [expr {$i + $n2 - $n1 + 1}]
+                        }
+                    }
+                    # THEN compute number of LOGICAL lines, and MAP the type
+                    set sz($LR) [expr {$end($LR) - $bgn($LR) - $i}]
+                    set t [string map "CDR $CDRtyp  ADD a  DEL d  CHG c" $typ]
+                    switch $t {
+                        "a" {    append NEWid $LN(l) a [incr LN(r)]
+                             if {$sz($LR)} {
+                                 append NEWid "," [incr LN(r) $sz($LR)]
+                             }
+                        }
+                        "d" {    append NEWid [incr LN(l)]
+                             if {$sz($LR)} {
+                                 append NEWid "," [incr LN(l) $sz($LR)]
+                             }
+                                 append NEWid d $LN(r)
+                        }
+                        "c" {if {"$LR" == "r" } {
+                                     append NEWid [incr LN(l)]
+                                 if {$bgn(l) != $end(l)} {
+                                     append NEWid "," [incr LN(l) $sz(l)]
+                                 }
+                                     append NEWid c [incr LN(r)]
+                                 if {$bgn(r) != $end(r)} {
+                                     append NEWid "," [incr LN(r) $sz(r)]
+                                 }
+                             }
+                        }
+                    }
+                }
+            }
+        }
+        lappend rnge $NEWid
+    }
+    # Combine will likely REMOVE more hunks than it ADDS. Ensure g(pos)
+    # REMAINS within its eventual bounds; preferably unchanged
+    #   (minpos was earlier set to the nunmber of hunks being removed)
+    set minpos [expr {(-2 * $minpos) + [llength $rnge] + [llength $g(diff)]}]
+    set g(pos) [min $minpos $g(pos)]
+
+    # Remove and Replace the designated HIDs
+    mark-diffs $rnge
+    update-display
+}
+
+###############################################################################
+# Split/Combine Dialog button callback: perform edge movement (and update UI)
+###############################################################################
+proc splcmb-adj {side edge btn} {
+    global splcmb
+    global w
+
+    # Only PERMITTED actions can invoke us, so NO CHECKs are EVER reqd
+    #   (buttons are enabled/disabled as needed per invocation)
+    # N.B> Args not only describe the action, but also the INVOKING widget
+    debug-info "\n    Btn HIT: Side<$side>  Edge<$edge>  Btn<$btn>"
+
+    # Invent some static translations to provide "symbolic meta-programming".
+    # Many are basically just 'inverse mappings' indexed by an EDGE or a BTN,
+    # (or a +/- 'btn' move defn). "push" (a <Split-only> predicate) says WHEN
+    # colocated edges MUST move together and is indexed by an EDGE plus a BTN
+    foreach {push(ud) push(lu) push(uu) push(ld)     otherS(l) otherS(r)   \
+             otherE(u) otherE(l)   otherB(u) otherB(d)   mvEg(d) mvEg(u) } \
+             { 1 1 0 0     r l   l u    d u      1  -1 }   { }
+
+    # Recover the semantic MODE we are operating under (because we can't PASS
+    # its value from a widget cmd), then use it to create a CONTEXT-SPECIFIC
+    # mapping from Edge/Btn specs to the 'LIMit edge' each is APPROACHING
+    # N.B> The Combine-mode mapping is  NECESSARILY DIFFERENT  than Split-mode
+    #       Edge - Btn        "Combine"          "Split"
+    #      Upperedge-Up   -> Outer-Upper    -> Outer-Upper
+    #      Upperedge-Down -> Inner-Upper    -> Outer-Lower
+    #      Loweredge-Up   -> Inner-Lower    -> Outer-Upper
+    #      Loweredge-Down -> Outer-Lower    -> Outer-Lower
+    if {[set CS [expr {[llength $splcmb(rnge)] - 1}]]} {
+              set CSmap {uu ou    ud iu    lu il    ld ol}
+    } else {  set CSmap {uu ou    ud ol    lu ou    ld ol} }
+
+    # OK - Extract/categorize the CURRENT edge location values
+    # THEN actually MOVE the designated edge ...
+    #   (HOWEVER when in <Split-mode>):  IFF both edges WERE coincident, also
+    #   conceptually PUSH (really drag) the OPPOSING edge along as well ...
+    #   UNLESS the movement logically SEPARATEs the edges (ie. stops pushing)
+    set aLIM $splcmb([string map $CSmap ${edge}$btn])      ;# (a)pproached LIM
+    set bLIM $splcmb([string map $CSmap ${edge}$otherB($btn)]) ;# (b)ehind LIM
+    set oldE $splcmb(${side}$edge)             ;# Edge ABOUT to move
+    set oppE $splcmb(${side}$otherE($edge))    ;# (opp)osed Edge <Split only>
+
+    #   MOVE the EDGE  !!
+    set newE [incr splcmb(${side}$edge) $mvEg($btn)] 
+
+    # Special condition (mostly meaningful for Combine):
+    #   If moved edge WAS sitting *on* the "Opposite" LIM, its possibly ALSO
+    #   a jump entry - so PRETEND we just moved THERE and let jumping fix it.
+    # HOWEVER - This is really all about ensuring we NEVER "jump BACKWARD" by
+    # accidentally STARTing from a "wrong direction" half of a jump tuple.
+    #   (because *that* causes an endless-loop toggling jump condition)
+    if {($oldE == $bLIM && [set i [lsearch $splcmb(j$side) $oldE]] >= 0) \
+    &&  (($i & 1  && $mvEg($btn) < 0) || (!($i & 1) && $mvEg($btn) > 0))} {
+        set newE $oldE}
+
+    set i 0
+    # Check if the move TRIGGERS a "jump": jumping moves to the "other end" 
+    # of the jump tuple (which MUST be in the direction we are moving) ...
+    # and THEN moves the edge AGAIN (by 1) UNLESS doing so would exceed the
+    # approaching limit. Barring that, each successful jump forces a new pass,
+    # looking for an ABUTTED jump, until no more exist (or 'aLIM' is found)
+    #   N.B> A Split NEVER has abutted entries - Combine may have several
+    while {$i < [llength $splcmb(j$side)]} {
+        set i 0 ;# (start a new pass - ends @ aLIM or when NO jump is found)
+        foreach jmp $splcmb(j$side) {
+            if {$jmp == $newE} {
+                set newE [lindex $splcmb(j$side) [expr {$i & 1 ? $i-1 : $i+1}]]
+                if {$newE == $aLIM} { set i [llength $splcmb(j$side)]
+                         set splcmb(${side}$edge) $newE
+                } else { set splcmb(${side}$edge) [incr newE $mvEg($btn)]
+                    if {$newE == $aLIM} { set i [llength $splcmb(j$side)] }
+                }
+                break
+            }
+            incr i
+        }
+    }
+    # Also check if moving is "push"ing the opposing edge with it (Split only)
+    if {$oldE == $oppE && $push(${edge}$btn)} {
+        set oppE [set splcmb(${side}$otherE($edge)) $newE] }
+ 
+    # Now the FUN - First, readjust which buttons will NOW be available ...
+    set Bwdg $w(scDialog).btn.$side	;# (just conserving src-code typing)
+    if {$newE == $aLIM} {  if {$oppE == $aLIM && !$CS} {
+            ${Bwdg}${edge}$otherB($btn)        configure -state normal
+            ${Bwdg}$otherE($edge)$btn          configure -state disabled } \
+          { ${Bwdg}${edge}$otherB($btn)        configure -state normal   }
+        ${Bwdg}${edge}$btn                     configure -state disabled
+    } else {
+        if {!$CS && $oppE != $aLIM  && $oppE != $bLIM} {
+            ${Bwdg}$otherE($edge)$otherB($btn) configure -state normal }
+        ${Bwdg}${edge}$otherB($btn)            configure -state normal
+    }
+
+    # ... THEN add visual user feedback of what this boundary move MEANT
+    splcmb-Feedback $CS
+
+    # ADJUST Text VIEW (in the side just changed) so we see what happenned
+    #   (user is UNABLE to scroll for themselves ... grab is in force)
+    incr oldE $mvEg($otherB($btn))       ;# keeps OLD(+1) and NEW in view !!
+    if {"$side"=="l"}  {$w(LeftText) see $oldE.0}  {$w(RightText) see $oldE.0}
+}
+
+###############################################################################
+# Interpret, display and produce a data mapping of the CURRENT moved-edge state
+###############################################################################
+proc splcmb-Feedback {Combine} {
+    global splcmb
+    global g w
+
+    # Begin by UNtagging all Split/Combine highlighting from affected area
+    foreach wdg "$w(LeftText) $w(RightText)" {
+        foreach tag {scCDR scADD scDEL scCHG} {
+            $wdg tag remove $tag $splcmb(ou).0 $splcmb(ol).0
+        }
+    }
+
+    # Then put back what belongs based on CURRENT boundary conditions
+    #   For Combine, compute the current EFFECTIVE Outer (U/L) bounds;
+    #   Split ALREADY knows those bounds - just copy to the local vars
+    if {$Combine} {
+        # Begin by FINDING the outer (u/l) edges of the INVOLVED hIDs
+        #   (remember to discount the +1 of the lower edges when comparing)
+        set upper [set lower 0]
+        foreach hunk $splcmb(rnge) {
+            foreach {S E na na na na hID} $hunk {break}
+            if {($splcmb(lu)   > $E && $splcmb(ru)   > $E) \
+            ||  ($splcmb(ll)-1 < $S && $splcmb(rl)-1 < $S)} {continue}
+
+            # extract type
+            regexp {[0-9,]*([acd])[0-9,]*} $hID na type
+
+            # Retain JUST the first and last edge values (and its diff-type)
+            if {!$upper}     {set upper $S; set typ(u) $type}
+            if {$E > $upper} {set lower $E; set typ(l) $type; incr lower}
+        }
+    } else { foreach {upper lower} "$splcmb(ou) $splcmb(ol)" { } }
+
+    # Now, arrange ALL edges (working and limits) as 3 top-to-btm
+    # sub-regions, noting which HAS any content (per sub-region, per side).
+    foreach LR {l r} {
+        foreach "splcmb(${LR}1) splcmb(${LR}2) splcmb(${LR}3)" "0 1 0" { }
+        set splcmb(${LR}1)  [expr \
+                   {[set t(1$LR) $upper] < [set b(1$LR) $splcmb(${LR}u)]}]
+
+        set splcmb(${LR}2)  [expr \
+          {[set t(2$LR) $splcmb(${LR}u)] < [set b(2$LR) $splcmb(${LR}l)]}]
+
+        set splcmb(${LR}3)  [expr \
+                   {[set t(3$LR) $splcmb(${LR}l)] < [set b(3$LR) $lower]}]
+
+        #debug-info [join [list \
+        "<${LR}1>$splcmb(${LR}1)  <t1$LR>$t(1$LR)  <b1$LR>$b(1$LR)"    \
+        "<${LR}2>$splcmb(${LR}2)  <t2$LR>$t(2$LR)  <b2$LR>$b(2$LR)"    \
+        "<${LR}3>$splcmb(${LR}3)  <t3$LR>$t(3$LR)  <b3$LR>$b(3$LR)" ] "\n"]
+    }
+
+    # Then "paint" (tag) the occupied sub-regions in appropriate MAP colors
+    # based on the LOGICALLY IMPLIED DIFFERENCE of each sub-region pairing
+    # ALSO RECORD (via L/R sub-region 'D'atums) WHICH lines + type was set
+    #
+    # N.B> DECREMENTing 'bottom' values IN-BETWEEN its widget use and the
+    #   subsequent recording produces a PURE "screen Lnum" data viewpoint
+    #
+    # Note: The only distinction reqd for 'Combine' is to PREVENT treating
+    # the 'Pad'-only half of region 1&3 'a/d'-type hunks AS data (by turning
+    # the 'occupied' flag OFF ... *AFTER* highlighting for user feedback)
+    foreach rgn {1 2 3} {
+        if {$splcmb(r$rgn) || $splcmb(l$rgn)} {
+            if {$splcmb(r$rgn) && $splcmb(l$rgn)} {
+                if {$rgn == 2} {       set tag scCDR
+    	        if {! $splcmb(r$rgn)} {set tag scDEL}
+    	        if {! $splcmb(l$rgn)} {set tag scADD}
+                } else                {set tag scCHG}
+                $w(LeftText)  tag add  $tag  $t(${rgn}l).0 $b(${rgn}l).0
+                $w(RightText) tag add  $tag  $t(${rgn}r).0 $b(${rgn}r).0
+    	        incr b(${rgn}l) -1
+    	        incr b(${rgn}r) -1
+                set splcmb(l${rgn}D) \
+                         "$t(${rgn}l) $b(${rgn}l) [string range $tag 2 4]"
+                set splcmb(r${rgn}D) \
+                         "$t(${rgn}r) $b(${rgn}r) [string range $tag 2 4]"
+            } elseif {$splcmb(r$rgn)} {
+                $w(RightText) tag add scADD $t(${rgn}r).0 $b(${rgn}r).0
+    	        incr b(${rgn}r) -1
+                if {$Combine && (($rgn==1 && "$typ(u)"=="d") \
+                || ($rgn==3 && "$typ(l)"=="d"))} {set splcmb(r$rgn) 0}
+                set splcmb(r${rgn}D) "$t(${rgn}r) $b(${rgn}r) ADD"
+            } else {
+                $w(LeftText)  tag add scDEL $t(${rgn}l).0 $b(${rgn}l).0
+    	        incr b(${rgn}l) -1
+                if {$Combine && (($rgn==1 && "$typ(l)"=="a") \
+                || ($rgn==3 && "$typ(l)"=="a"))} {set splcmb(l$rgn) 0}
+                set splcmb(l${rgn}D) "$t(${rgn}l) $b(${rgn}l) DEL"
+            }
+        }
+    }
+}
+
+###############################################################################
+# Primarily code that advises (1|0) on eligibility of hunk for Split/Combine...
+# ...but also provides a formatted STDOUT data-dump for debugging purposes
+###############################################################################
+proc splcmb-chk {what {pos 0}} {
+    global g splcmb
+
+    switch -exact -- $what {
+        "split" {
+            # Is dependant on there being MORE than 1 line on EITHER side
+            # N.B> this PREVENTS splitting ANY one-line hunk (incl. "chg"-type)
+            if {$pos <= $g(count) && $g(count) > 1} {
+                foreach {S E Pl na na Pr} $g(scrInf,[hunk-id $pos]) {break}
+                return [expr {($E - $S) || ($Pl + $Pr > 1)}]
+            }
+        }
+
+        "cmbin" {
+            # Is dependant on their being some hunk ABUTTED either above/below
+            if {$pos <= $g(count) && $g(count) > 1} {
+
+                # Grab edge values of the target CDR at 'pos'
+                foreach {S E} $g(scrInf,[hunk-id $pos]) {break}
+
+                # Validate and check BELOW target first, then ABOVE - and exit ASAP
+                if {[incr pos -1]} {
+                    if {($S - 1 == [lindex $g(scrInf,[hunk-id $pos]) 1])} {return 1}
+                }
+                if {[incr pos 2] <= $g(count)} {
+                    if {($E + 1 == [lindex $g(scrInf,[hunk-id $pos]) 0])} {return 1}
+                }
+            }
+        }
+
+        "data" {
+            if {"$pos" != "0"} { puts "***** $pos" } ;# <-- simply a dump identifier
+            # This is a DRAMATICALLY more READABLE output format!!!
+            puts " EDGES : <l>$splcmb(lu) $splcmb(ll)    <r>$splcmb(ru) $splcmb(rl)"
+            puts " AMONG :"
+            foreach {S E Pl Ol Pr Or hID} [join $splcmb(rnge)] {
+                puts "[format "\t%d  %d    P=%d,%d    O=%d,%d    %s" \
+                                 $S  $E     $Pl $Pr    $Ol $Or  $hID]"
+            }
+            puts "\nou $splcmb(ou)"
+            foreach side {l r} {
+                foreach rgn {1 2 3} {
+                    if {$splcmb(${side}$rgn)} {
+                        puts "\t${side}$rgn $splcmb(${side}$rgn)\t${side}${rgn}D\
+                                                          $splcmb(${side}${rgn}D)"
+                    } else {puts "\t${side}$rgn $splcmb(${side}$rgn)"}
+                }
+                if {"$splcmb(j$side)" != {}} {puts "\t\tj$side  $splcmb(j$side)"}
+                if {"$side" == "l"} { if {[llength $splcmb(rnge)] > 1} {
+                    puts "iu $splcmb(iu)\n\t(CDR)\nil $splcmb(il)" }  { puts "" }
+                }
+            }
+            puts "ol+ $splcmb(ol)\n"
+        }
+    }
+    return 0
+}
+
+###############################################################################
 # all the code to handle the report writing dialog.
 ###############################################################################
 proc write-report {command args} {
@@ -6436,8 +7226,8 @@ proc write-report {command args} {
             #    (while "H" is the index of the HUNK that gets read from)
             # N.B. code DETECTs & INTERPOLATEs further hunks AS lines advance
             lappend F S E P(Left) O(Left) C(Left) P(Right) O(Right) C(Right)
-            if {$g(count) > [set i [set H 0]]} {
-                     foreach $F $g(scrInf,[hunk-id [incr H]]) { }
+            if {$g(count) > [set i [set pfxH [set H 0]]]} {
+                     foreach $F $g(scrInf,[set hID [hunk-id [incr H]]]) { }
             } else { foreach $F    { 0 0 0 0 "" 0 0 "" }      { } }
 
             # Now produce the requested categories of data (if any)
@@ -6451,29 +7241,46 @@ proc write-report {command args} {
 
                     # Waterfall test detects phase of WHERE "$i" falls IN hunk,
                     # thus what SHOULD be displayed (if not 'off' by request)
+                    #
+                    # N.B> DESPITE coding as loop - this RARELY ever needs to!
+                    #   It exists ENTIRELY because there is NO 'goto' in TCL;
+                    # thus a 'continue' is the ONLY way to RE-start this code !
+                    while {true} {
+
                     if {$H > 0 && $i >= $S} {
                         if {$i > ($E - $P($side))} {
                             if {$i > $E} {
                                 if {$H < $g(count)} {
                                     # Step forward to the NEXT hunk mapping
-                                    foreach $F $g(scrInf,[hunk-id [incr H]]) {}
+                                    set hID [hunk-id [incr H]]
+                                    foreach $F $g(scrInf,$hID) {}
 
                                     # WHY IS THERE NO goto IN THIS LANGUAGE!!!
-                                    #        (must emulate jump to...)
-                                    # RESTART waterfall if 'i' is NOW INSIDE
-                                    # newly read-in hunk (supports a future
-                                    # feature where hunks MIGHT actually abbut)
-                                    if {$i == $S} {
-                                        if {$i > ($E-$P($side)) && $i == $E} {
-                                                 set LN [set CB 0]  ;# PAD
-                                        } else { set LN [set CB 1]} ;# DIFF
-                                    } else { set LN 1;set CB 0};#before/beyond
-                                    ## (Bad PGMRS is the problem - NOT goto) ##
+                                    #
+                                    # RESTART waterfall: 'i' MAY now be INSIDE
+                                    # newly read-in hunk (supports abutted hunk
+                                    # defs as created by Split/Combine feature)
+                                    continue
+                                    ## (Poor PGMRS is the problem - NOT goto !)
 
                                 } else {set LN 1;set CB 0 } ;# Is beyond hunk
                             } else    { set LN  [set CB 0]} ;# A PADDING line
                         } else        { set LN  [set CB 1]} ;# A  DIFF   line
                     } else            { set LN 1;set CB 0 } ;# Is before hunk
+
+                    break ;# if we reach here, we need NOT go back around!!
+                    }
+
+                    # "Diffs Only" acts as a filter, blocking ALL other attrs.
+                    if {"$report(doText$side)"=="Diffs Only"} {
+                        if {$LN && !$CB} { continue } {
+                            # However, when actually *IN* a diff region make
+                            # ONE 'Diff Header' prefix at 1st line of 1st side
+                            if {$pfxH < $H } {
+                                puts $handle "\nDiff #[incr pfxH] ($hID):"
+                            }
+                        }
+                    }
 
                     if {$report(doLineNumbers$side)} {
                         if {$LN} { append out($side) \
@@ -6488,7 +7295,7 @@ proc write-report {command args} {
                                       [string cat $C($side) "  "] : "  "}] 0 1]
                     }
 
-                    if {$report(doText$side)} {
+                    if {"$report(doText$side)" != " (no text) "} {
                         append out($side) [string trimright \
                                    [$w(${side}Text) get "$i.0" "$i.0 lineend"]]
                     }
@@ -6504,14 +7311,15 @@ proc write-report {command args} {
                     set output "$out(Left)"
 
                 }
-                puts $handle "[string trimright "$output"]"
+                set output "[string trimright "$output"]"
+                if {[string length "$output"]} { puts $handle "$output" }
             }
             close $handle
 
             wm withdraw $w(reportPopup)
         }
     browse {
-            set path [tk_getSaveFile \
+            set path [tk_getSaveFile -parent $w(reportPopup) \
               -initialfile $report(filename)]
 
             if {[string length $path] > 0} {
@@ -6556,7 +7364,8 @@ proc write-report {command args} {
                 set choose [checkbutton $cf.choose$side]
                 set linenum [checkbutton $cf.linenum$side]
                 set cm [checkbutton $cf.changemarkers$side]
-                set text [checkbutton $cf.text$side]
+                tk_optionMenu [set txt $cf.text$side] report(doText$side) \
+                                   "Full Text"    "Diffs Only"    " (no text) "
 
                 $choose configure -text "$side Side" \
                   -variable report(doSide$side) -command [list write-report \
@@ -6566,18 +7375,17 @@ proc write-report {command args} {
                   -variable report(doLineNumbers$side)
                 $cm configure -text "Change Markers" \
                   -variable report(doChangeMarkers$side)
-                $text configure -text "Text" -variable report(doText$side)
 
                 grid $choose -row 0 -column $col($side) -sticky w
                 grid $linenum -row 1 -column $col($side) -sticky w -padx 10
                 grid $cm -row 2 -column $col($side) -sticky w -padx 10
-                grid $text -row 3 -column $col($side) -sticky w -padx 10
+                grid $txt -row 3 -column $col($side) -sticky w -padx 10
 
                 # save the widget paths for later use...
                 set w(reportChoose$side) $choose
                 set w(reportLinenum$side) $linenum
                 set w(reportCM$side) $cm
-                set w(reportText$side) $text
+                set w(reportText$side) $txt
             }
 
             # the entry, label and button for the filename will get
@@ -6699,25 +7507,25 @@ proc do-usage {mode} {
     $g(name) may be started in any of the following ways:
 
     Interactive selection of files to compare:
-     	tkdiff
+        tkdiff
 
     Plain files:
-     	tkdiff FILE1 FILE2
+        tkdiff FILE1 FILE2
 
     Plain file with conflict markers:
-     	tkdiff -conflict FILE
+        tkdiff -conflict FILE
 
     Source control (AccuRev, BitKeeper, ClearCase, CVS, Git, Mercurial,\
       Perforce, PVCS, RCS, SCCS, Subversion)
-     	tkdiff FILE
-	tkdiff -rREV FILE
-	tkdiff -rREV1 -rREV2 FILE
+        tkdiff FILE
+        tkdiff -rREV FILE
+        tkdiff -rREV1 -rREV2 FILE
         tkdiff OLD-URL[@OLDREV] NEW-URL[@NEWREV] (Subversion)
 
     Additional optional parameters:
-	-a ANCESTORFILE
-	-o MERGEOUTPUTFILE
-	-L LEFT_FILE_LABEL [-L RIGHT_FILE_LABEL]
+        -a ANCESTORFILE
+        -o MERGEOUTPUTFILE
+        -L LEFT_FILE_LABEL [-L RIGHT_FILE_LABEL]
         -d debug
     }
 
@@ -6763,13 +7571,13 @@ To merge a file with conflict markers generated by "<cmp>merge</cmp>",\
       "<cmp>tkdiff -conflict FILE</cmp>". The file is split into two temporary\
       files which you can merge as usual (see below).
 
-If the merge output filename is not specified, tkdiff will present a dialog\
+If the merge output filename is not specified, $g(name) will present a dialog\
       to allow you to choose the name of the merge output file.
 
-Note further that anything with a leading dash that isn't recognized as a\
-      $g(name) option is passed through to diff.  This permits you to\
-      temporarily alter the way diff is called, without resorting to a change\
-      in your preferences file.
+Note further that anything with a leading dash that is <itl>not</itl>\
+      recognized as a $g(name) option is passed through to diff.  This\
+      permits you to temporarily alter the way diff is called, without\
+      resorting to a change in your preferences file.
     }
 
     if {$mode == "cline"} {
@@ -6792,9 +7600,9 @@ proc do-help {} {
 <hdr>Layout</hdr>
 
 The top row contains the File, Edit, View, Mark, Merge and Help menus. The\
-      second row contains the labels which identify the contents of each text\
-      window. Below that is a toolbar which contains\
-      navigation and merge selection tools.
+      second row contains a toolbar which contains navigation and merge\
+      selection tools.  Below that is the labels which identify the contents\
+      of each text window.
 
 The left-most text widget displays the contents of <cmp>FILE1</cmp>, the most\
       recently checked-in revision, <cmp>REV</cmp> or <cmp>REV1</cmp>,\
@@ -6840,24 +7648,26 @@ You may also select any highlighted diff region as the current diff region by\
 
 1. From the <btn>File</btn> menu:
 
-The <btn>New...</btn> button displays a dialog where you may choose two files\
+The <btn>New...</btn> item displays a dialog where you may choose two files\
       to compare. Selecting "Ok" from the dialog will diff the two files. The\
-      <btn>Recompute Diffs</btn> button recomputes the\
-      differences between the two files whose names appear at the top of the\
-      <itl>$g(name)</itl> window. The <btn>Write Report...</btn> lets you\
-      create a report file that contains the information\
-      visible in the windows. Lastly, the <btn>Exit</btn> button terminates\
+      <btn>Recompute Diffs</btn> item recomputes the differences between the\
+      two files whose names appear at the top of the\
+      <itl>$g(name)</itl> window. The <btn>Write Report...</btn> item lets you\
+      create a report file that contains various information\
+      visible in the windows. Lastly, the <btn>Exit</btn> item terminates\
       <itl>$g(name)</itl>.
 
 2. From the <btn>Edit</btn> menu:
 
 <btn>Copy</btn> copies the currently selected text to the system clipboard.\
       <btn>Find</btn> pops up a dialog to let you search either text window\
-      for a specified text string. <btn>Edit File 1</btn> and <btn>Edit File\
-      2</btn> launch an editor on the files displayed in the left- and\
-      right-hand panes.  <btn>Preferences</btn> pops up a dialog box from\
-      which display (and other) options can be
-changed and saved.
+      for a specified text string. <btn>Split...</btn> and\
+      <btn>Combine...</btn> pops up a dialog that allows you to rearrange\
+      the CONTENT of the CDR to isolate specific lines, facilitating\
+      specific merge file generation goals. <btn>Edit File 1</btn> and\
+      <btn>Edit File 2</btn> launch an editor on the files displayed in the\
+      left- and right-hand panes.  <btn>Preferences</btn> pops up a dialog\
+      box from which display (and other) options can be changed and saved.
 
 3. From the <btn>View</btn> menu:
 
@@ -6888,23 +7698,43 @@ The <btn>Show Merge Window</btn> button pops up a window with the current\
 
 6. From the <btn>Help</btn> menu:
 
-The <btn>About $g(name)</btn> button displays copyright and author\
-      information. The <btn>On GUI</btn> button generates this window. The\
-      <btn>On Command Line</btn> button displays help on the\
-      $g(name) command line options. The <btn>On Preferences</btn> button\
+The <btn>About $g(name)</btn> item displays copyright and author\
+      information. The <btn>On GUI</btn> item generates this window. The\
+      <btn>On Command Line</btn> item displays help on the\
+      $g(name) command line options. The <btn>On Preferences</btn> item\
       displays help on the user-settable preferences.
 
 7. From the toolbar:
 
 The first tool is a dropdown list of all of the differences in a standard\
       diff-type format. You may use this list to go directly to any diff\
-      record. The <btn>Next</btn> and <btn>Previous</btn>\
+      record. Further navigation tools will be described in due turn.  The\
+      next tool, <btn>Recompute Diff</btn>, simply re-starts the diff of the\
+      CURRENT two files from scratch as if it was a New Diff. This could be\
+      appropriate if you have invoked an editor on either file since starting\
+      and now wish to see the net effects of your editting. The following two\
+      tools, <btn>Split</btn> and <btn>Combine</btn>, each provide\
+      complimentary abilities to adjust the boundaries of the CDR. The\
+      reasons for doing this are further explained in the section below on\
+      Merging.
+The remaining tools on the toolbar consist of the <btn>Find</btn> tool for\
+      searching the text for a given word or phrase. This is then followed\
+      (in order) by groupings of tools dealing with merge choice selections,\
+      navigation, and lastly a bookmarking, or Diff Marks, facility for\
+      remembering specific diff positions so that jumping among them does\
+      not require memorization. These, among other topics, will now be\
+      further described.
+
+<hdr>Navigation tools</hdr>
+
+      The <btn>Next</btn> and <btn>Previous</btn>\
       buttons take you to the "next" and "previous" DR, respectively. The\
       <btn>First</btn> and <btn>Last</btn> buttons take you to the\
       "first" and "last" DR. The <btn>Center</btn> button centers the\
       CDRs in their respective text windows. You can set <btn>Auto\
       Center</btn> in <btn>Preferences</btn> to do this automatically for you\
       as you navigate through the diff records.
+
 
 <hdr>Keyboard Navigation</hdr>
 
@@ -6928,7 +7758,9 @@ The cursor, Home, End, PageUp and PageDown keys work as expected, adjusting\
 To scroll the text widgets independently, make sure <btn>Synchronize\
       Scrollbars</btn> in <btn>Preferences</btn> is off. If it is on,\
       scrolling any text widget scrolls all others. Scrolling does not\
-      change the current diff record (CDR).
+      change the current diff record (CDR). A Mouse scroll-wheel is also\
+      recognized for scrolling vertically, or, if the <cmp>Shift</cmp> key\
+      is simultaneously pressed, horizontally, as well.
 
 <hdr>Diff Marks</hdr>
 
@@ -6948,21 +7780,74 @@ The diff map is a map of all the diff regions. It is shown in the middle of\
       overlap regions are marked in yellow. The height of each patch\
       corresponds to the relative size of the diff region. A\
       thumb lets you interact with the map as if it were a scrollbar.
-All diff regions are drawn on the map even if too small to be visible. For\
-      large files with small diff regions, this may result in patches\
+      All diff regions are drawn on the map even if too small to be visible.\
+      For large files with small diff regions, this may result in patches\
       overwriting each other.
 
 <hdr>Merging</hdr>
 
 To merge the two files, go through the difference regions (via "Next",\
-      "Prev" or whatever other means you prefer) and select "Left" or\
-      "Right" (next to the "Merge Choice:" label) for each. Selecting\
-      "Left" means that the the left-most file's version of the difference\
-      will be used in creating the final result; choosing "Right" means that\
-      the right-most file's difference will be used. Each\
-      choice is recorded, and can be changed arbitrarily many times. To\
-      commit the final, merged result to disk, choose "Write Merge File..."\
-      from the <btn>Merge</btn> menu.
+      "Prev" or whatever other means you prefer) and select "<bld>L</bld>"\
+      (for "Left") or "<bld>R</bld>" (for "Right"), located adjacent to the\
+      "Merge Choice:" label, assigning which side should be used for each.\
+      Selecting "Left" means that the the left-most file's version of the\
+      difference will be used in creating the final result; choosing "Right"\
+      means that the right-most file's difference will be used.
+      Each choice is recorded, and can be changed arbitrarily many times.\
+      If you need pieces from BOTH the Left AND Right versions you may choose\
+      the "<bld>LR</bld>" or "<bld>RL</bld>" (Left-then-Right or\
+      Right-then-Left, respectively) choices instead, <itl>but then</itl> you\
+      must remember to edit the merged result AFTER you commit it to disk.\
+      This might be useful, for example, if <itl>both</itl> variations should\
+      exist with additional wording, or in the case of source coding, a\
+      conditional inclusion macro, surrounding the entire result. To commit\
+      the final, merged result to disk, choose "Write Merge File..." from the\
+      <btn>Merge</btn> menu.
+
+<hdr>Merging - in more detail</hdr>
+
+Oftentimes, you may find that the "Diff" program has packed several lines\
+      worth of differences into a large chunk, simply because it never found a\
+      <itl>common</itl> line that BOTH files could agree was the SAME in both\
+      files. Yet only a <itl>SINGLE</itl> defined difference record (a CDR)\
+      can have its Left or Right side chosen for merging at any one time.\
+      This is the "problem" that <btn>Split</btn> or <btn>Combine</btn> are\
+      intended to address. Using these tools, you will be permitted to\
+      repartition the exact lines that should be treated as a distinct\
+      difference record. In each case, you start from some specific CDR,\
+      and then either break it apart into smaller pieces ("Split") or\
+      reassemble it ("Combine") at boundaries of your choice.
+      A dialog window is provided to oversee the movement of the CDR boundary\
+      edges, with feedback provided in the Text windows. You need only to\
+      click on arrows to adjust either or both edges in the Left or Right\
+      text window displays until satisfied that the <itl>NEW</itl> CDR\
+      describes the change content you wish to convey.
+      Once accepted, $g(name) will treat the new difference record exactly\
+      the same as any other, despite the fact that it appears run together\
+      with other adjoining records, having NO common line to separate them.\
+      The power of this is that two modifications, having NOTHING to do\
+      with each other beyond proximity, can thus be merged (or not)\
+      <itl>INDIVIDUALLY</itl> as needed. Given that many version control\
+      systems prefer that only those lines pertinent to a specific logical\
+      change reside in a given 'patch', these features allows the user to\
+      surgically distinguish one <itl>logical</itl> change from another.
+      Note that ONLY a previously Split record, can ever be Combined, and\
+      that $g(name) will always assign each line of the original CDR into an\
+      appropriate record (creating and/or removing existing records as\
+      necessary), automatically assigning its type (add/change/delete).
+      If you have difficulty envisioning which edges to move to accomplish\
+      a specific goal, think of the edges as defining 3 individual regions\
+      per side of data: Above-the-CDR, the NEW CDR, and Below-the CDR. Then\
+      remember that changes always flow from the left side to the right. Thus\
+      when a Left side region has a zero size, the corresponding Right side\
+      region is being "added". Conversely, if a right-side region describes\
+      zero lines, the left-side region describes a "delete". Regions that BOTH\
+      have lines are "changes".
+      Note that only REAL lines (those having Line numbers, when shown) are\
+      ever counted toward the occupancy of the regions. Padding lines\
+      (displayed to align CDRs on screen) mean nothing despite their being\
+      highlighted as part of a CDR, and will be <itl>stepped over</itl> as\
+      edges are moved.
 
 <hdr>Merge Preview</hdr>
 
@@ -7003,9 +7888,9 @@ Preferences are stored in a file in your home directory (identified by the\
       of "/" will be used. If you are on a Windows platform the file will be\
       named <cmp>_tkdiff.rc</cmp> and will have the attribute "hidden". For\
       all other platforms the file will be named\
-      ".tkdiffrc". You may override the name and location of this file by\
-      setting the environment variable <cmp>TKDIFFRC</cmp> to whatever\
-      filename you wish.
+      "<cmp>.tkdiffrc</cmp>". You may override the name and location of this\
+      file by setting the environment variable <cmp>TKDIFFRC</cmp> to\
+      whatever filename you wish.
 
 Preferences are organized into three categories: General, Display and\
       Appearance.
@@ -7247,6 +8132,60 @@ This is a list of Tk text widget tag options that are applied to individual\
 
 This defines the number of characters for each tabstop in the main display\
       windows. The default is 8.
+
+<hdr>Custom Settings</hdr>
+
+There is an additional setting built-in to the Preferences file called\
+     <bld>customCode</bld> (together with a comment about not using it) that\
+     nevertheless has some simple uses. The big advantage is that, like each\
+     other setting described above, the contents of this setting <itl>IS</itl>\
+     retained automatically when modified by the $g(name) Preferences Dialog.
+     However, it can only be <itl>set</itl> or <itl>modified</itl> externally\
+     via a text editor. Still, there are customizations of the GUI that many\
+     users find helpful that are often difficult (if not impossible) to\
+     specify correctly using other means. We therefore offer up these\
+     possibilities as suggestions:
+
+     1. Colors used for the Diff Map entries -
+These colors are internally selected by $g(name) and are basically considered\
+     unchangeable only because they are referenced by name in the user help.\
+     However, their form within the program is a simple association of a name\
+     and a color. Thus placing the commands:
+ <cmp>
+		define mapchg {blue}
+		define mapdel {red}
+		define mapins {green}
+</cmp>
+within the "customCode" definition will result in those named colors being\
+     used instead of the default "DodgerBlue", "Tomato", and "PaleGreen"\
+     respectively, <itl>everywhere</itl> within the program, including not\
+     only the Diff Map, but in Split/Combine highlighting, and potentially\
+     the highlighting of Line numbers or Changebars (if requested).
+
+     2. Color used for the CDR during Split or Combine -
+As above, adjusting this color is as simple as:
+<cmp>
+		define adjcdr {magenta}
+</cmp>
+which <itl>is</itl> the currently assigned default as shown.
+
+    3. Highlighting the current Merge Choice (when in Icon mode) -
+This item, typically required the use of XResources in the past to do\
+    correctly, but the following is much simpler:
+<cmp>
+		set w(selcolor) orange
+</cmp>
+makes it easier to see which of the four icons is presently "selected", as\
+    the default is generally only a greyed background shading of the\
+    unselected state. Note that the command "set" and name "w(selcolor)"\
+    must be exactly as shown (using parenthesis NOT braces as the earlier\
+    examples).
+
+CAVEAT: Doing more than this requires intimate knowledge of the internal\
+    code, and, as such, could be subject to future elimination or even\
+    promotion to a full fledged REAL 'Preference' setting. But for now,\
+    they work. Moreover, the admonishment to not misuse this facility still\
+    applies, as it is exceedingly easy to disrupt normal program operation.
     }
 
     # since we have embedded references to the preference labels in
@@ -9883,6 +10822,21 @@ IYRAQgghhBAiAEIIgjDIEEIIIYQQUAiAEEIgjAEAgAAAAAAAACGEEARhAIQQQgghhCAPQgghhEAA
 CCEEEUIIIYQiADs=
 }
 
+image create photo splitDiffImage -format gif -data {
+R0lGODlhFgAWALMAANnZ2ba2tkpKSp6enmJiYgAAAAC5AACWMQBQAP//////////////////
+/////////yH5BAEAAAAALAAAAAAWABYAAASKEMhJaRAD41G7DEQhipjXBYWhqoVgWmBxzEjB
+vUAQG/NRuy9diNercXTIJGHYOxR+gcFyOhURfYUQYTAYeUdXI4Cbk63O4Wyl22z3bB22uw2v
+oHyIvL5pUFO6X158cGQ6XIeHIoNaR0lJXDI9fT84hpFFdUFRl1hAlTGYN5+cTp44Ul8lOBMZ
+rRsRADs=
+}
+
+image create photo cmbinDiffImage -format gif -data {
+R0lGODlhFgAWAKIAANnZ2ba2tkpKSgAAAJ6engC5AACWMQBQACH5BAEAAAAALAAAAAAWABYA
+AAOACLrcEGKQ4OqCowxBbcOFYUgeA4riUCqneGwm8QUZ+spXhCtE7cK5wUgw6YV+u0ckNGg2
+C8ehaSmCWqM3hhHF7ZK0wq54lFQODq6DuvvqXHpoZ5Or4XwiL2KgR9+4WT1JfCh1fw9lATR9
+dit7YVVAjRFcLytvYVmWLJN+mpcTAAkAOw==
+}
+
 image create photo nullImage
 
 image create bitmap resize -data {
@@ -9891,6 +10845,30 @@ image create bitmap resize -data {
     static char resize_bits[] = {
         0x20, 0x01, 0x30, 0x03, 0x38, 0x07, 0x3c, 0x0f, 0x3e, 0x1f, 0x3f, 0x3f,
         0x3e, 0x1f, 0x3c, 0x0f, 0x38, 0x07, 0x30, 0x03, 0x20, 0x01
+    }
+}
+
+image create bitmap arroWu -data {
+    #define arroWu_width 29
+    #define arroWu_height 15
+    static unsigned char arroWu_bits[] = {
+        0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00, 0x00,0x40,0x00,0x00,
+        0x00,0xe0,0x00,0x00, 0x00,0xf0,0x01,0x00, 0x00,0xf8,0x03,0x00,
+        0x00,0xfc,0x07,0x00, 0x00,0xfe,0x0f,0x00, 0x00,0xff,0x1f,0x00,
+        0x80,0xff,0x3f,0x00, 0xc0,0xff,0x7f,0x00, 0xe0,0xff,0xff,0x00,
+        0xf0,0xff,0xff,0x01, 0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00
+    }
+}
+
+image create bitmap arroWd -data {
+    #define arroWd_width 29
+    #define arroWd_height 15
+    static unsigned char arroWd_bits[] = {
+        0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00, 0xf0,0xff,0xff,0x01,
+        0xe0,0xff,0xff,0x00, 0xc0,0xff,0x7f,0x00, 0x80,0xff,0x3f,0x00,
+        0x00,0xff,0x1f,0x00, 0x00,0xfe,0x0f,0x00, 0x00,0xfc,0x07,0x00,
+        0x00,0xf8,0x03,0x00, 0x00,0xf0,0x01,0x00, 0x00,0xe0,0x00,0x00,
+        0x00,0x40,0x00,0x00, 0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00
     }
 }
 
