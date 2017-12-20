@@ -1,7 +1,10 @@
-4.3             (2017)
-     - Add ability to take a list of file pairs from a git diff (by Kevin X)
-     - Rework the main text windows as canvases so evertyhing stays visually
-       in sync while scrolling (by vamp)
+4.3             (2017):
+     * Add a facility to slice individual Diff records into logical pieces
+       providing more exacting mergefile generation capabilities (by vampm)
+     * Report generation can now suppress NON changed Text lines (by vampm)
+     * Add ability to take a list of file pairs from a git diff (by Kevin X)
+     * Rework the main text windows as a text + canvas hybrid so everything
+       stays visually aligned while scrolling with multiple fonts (by vampm)
 
 4.2             (2011):
      * Works with Subversion 1.7
