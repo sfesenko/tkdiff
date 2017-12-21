@@ -7089,14 +7089,14 @@ proc splcmb-chk {what {pos 0}} {
         "split" {
             # Is dependant on there being MORE than 1 line on EITHER side
             # N.B> this PREVENTS splitting ANY one-line hunk (incl. "chg"-type)
-            if {$pos <= $g(count) && $g(count) > 1} {
+            if {$pos <= $g(count) && $g(count) > 0} {
                 foreach {S E Pl na na Pr} $g(scrInf,[hunk-id $pos]) {break}
                 return [expr {($E - $S) || ($Pl + $Pr > 1)}]
             }
         }
 
         "cmbin" {
-            # Is dependant on their being some hunk ABUTTED either above/below
+            # Is dependant on there being some hunk ABUTTED either above/below
             if {$pos <= $g(count) && $g(count) > 1} {
 
                 # Grab edge values of the target CDR at 'pos'
