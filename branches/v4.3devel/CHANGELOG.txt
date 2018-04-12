@@ -1,10 +1,13 @@
-4.3             (2017):
+4.3             (2018):
      * Add a facility to slice individual Diff records into logical pieces
        providing more exacting mergefile generation capabilities (by vampm)
      * Report generation can now suppress NON changed Text lines (by vampm)
-     * Add ability to take a list of file pairs from a git diff (by Kevin X)
+     * Add ability to create a file-pairs list from a Git diff (by Kevin X),
+       then extended (by vampm) facilitating other sources of multi-pairs,
+       including local directory-to-directory comparisons and Subversion.
      * Rework the main text windows as a text + canvas hybrid so everything
        stays visually aligned while scrolling with multiple fonts (by vampm)
+     * Extensive audit and content update of the online help text (by vampm)
 
 4.2             (2011):
      * Works with Subversion 1.7
