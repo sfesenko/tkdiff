@@ -1064,8 +1064,8 @@ proc scm-detect {fn} {
     ### (which is NOT completely the case as it exists here) however, as some
     ### cases are combo/subsets of others there is plenty of room for debate.
     if {[file isdirectory [file join $dnam CVS]]}          { return CVS
-    } elseif {! [catch {eval "exec svn info $dnam"}]}      { return SVN
-    } elseif {[file isdirectory [file join $dnam .git]]}   { return GIT
+    } elseif {[is-repo-dir ".svn" $dnam]}                  { return SVN
+    } elseif {[is-repo-dir ".git" $dnam]}                  { return GIT
     } elseif {[regexp {://} $fn]}                          { return SVN
     } elseif {[sccs-is-bk]}                                { return BK
     } elseif {[file isdirectory [file join $dnam SCCS]]}   { return SCCS
@@ -1077,7 +1077,7 @@ proc scm-detect {fn} {
               [info exists ::env(P4CONFIG)]}               { return Perforce
     } elseif {[info exists ::env(ACCUREV_BIN)]}            { return Accurev
     } elseif {[info exists ::env(CLEARCASE_ROOT)]}         { return ClearCase
-    } elseif {[is-mercurial-repository $dnam]}             { return HG
+    } elseif {[is-repo-dir ".hg" $dnam]}                   { return HG
     }
 
     return "" ;# Unrecognized
@@ -1174,8 +1174,8 @@ proc get-file-rev {fn ndx {r ""} {Scm {}}} {
         }
         debug-info "exec $cmd rev-parse --show-prefix"
         set prefix [exec $cmd rev-parse --show-prefix]
-        if {"$r" == "" || "$rev" == "rBASE"} {
-            set finfo(lbl,$ndx) "$fn (GIT BASE)" ;# STAGEd vrsn
+        if {"$r" == "" || " " == [string index "$r" 0]} {
+            set finfo(lbl,$ndx) "$fn (GIT--staged)" ;# STAGEd vrsn
             set finfo(tmp,$ndx) "exec $cmd show \":$prefix$fn\""
         } else {
             set finfo(lbl,$ndx) "$fn (GIT $rev)" ;# REQSTd vrsn
@@ -1295,14 +1295,14 @@ proc get-file-rev {fn ndx {r ""} {Scm {}}} {
     return 0
 }
 
-proc is-mercurial-repository {dirname} {
-    debug-info "is-mercurial-repository ($dirname)"
-    # check for a .hg directory in all parent directories
+proc is-repo-dir {trgnam dirname} {
+    debug-info "is-repo-dir ($trgnam $dirname)"
+    # check for trgnam directory in all parent directories
     set dirname [file normalize $dirname]
     set prevdir {}
     while {$dirname != $prevdir} {
-        set hgfilename [file join $dirname .hg]
-        if {[file isdirectory $hgfilename]} { return true }
+        set chkDnam [file join $dirname $trgnam]
+        if {[file isdirectory $chkDnam]} { return true }
         set prevdir $dirname
         set dirname [file dirname $dirname]
     }
@@ -1685,7 +1685,7 @@ proc assemble-args {} {
         # Restore PRIOR values to finfo 
         array unset finfo {[ptl]*[0-9]}
         array set finfo $priorVals
-    } else {set finfo(fPairs) [expr {$cnt / 2}]}
+    } else {set finfo(fPairs) [expr {$cnt / 2}]; set finfo(fCurpair) 1}
     return $finfo(fPairs)
 }
 
