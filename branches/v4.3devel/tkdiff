@@ -670,7 +670,7 @@ proc translit-plot-txtags {twdg} {
         # Turn each tagging definition into a "look up table"(lut) of its
         # contents, then look for any option names of interest, and process
         # whichever ones are found (similar to above BASE setting derivation)
-        set nam [string cat $nam [string index $t 0]]
+        set nam [join [list $nam [string index $t 0]] ""]
         array set lut $opts($t)
         foreach op [array names lut -regexp {\-((f|b)g|(fo[rn]|ba))}] {
             # (allow for abbreviations of the tag names)
@@ -710,8 +710,8 @@ proc translit-plot-txtags {twdg} {
             # "look up table"(lut) of its contents, looking for the option
             # names of interest, overlaying values found (same as before)
             #   Note that each new name is a MAPPING into its Chgbar mark
-            set nam [string cat $nam [string map {i + c ! d - o ?} \
-                                                      [string index $t 0]]]
+            set nam [join [list $nam [string map {i + c ! d - o ?} \
+                                                      [string index $t 0]]] ""]
             array set lut $opts($t)
             foreach op [array names lut -regexp {\-((f|b)g|(fo[rn]|ba))}] {
                 # (again, allow for abbreviations of the tag names)
@@ -7577,7 +7577,7 @@ proc write-report {command args} {
 
                     if {$report(doChangeMarkers$side)} {
                         append out($side) [string range [expr {$CB ? \
-                                      [string cat $C($side) "  "] : "  "}] 0 1]
+                                      [join [list $C($side) "  "] ""] : "  "}] 0 1]
                     }
 
                     if {"$report(doText$side)" != " (no text) "} {
