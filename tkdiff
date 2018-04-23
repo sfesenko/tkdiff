@@ -29,7 +29,8 @@ exec wish "$0" -- ${1+"$@"}
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
 ###############################################################################
 
-package require Tk 8.0
+# Chgd from 8.0 to 8.5 as of V4.3 to ensure support of "Text displaylines"
+package require Tk 8.5
 
 # Change to t for trace info on stderr
 set g(debug) f
@@ -670,7 +671,7 @@ proc translit-plot-txtags {twdg} {
         # Turn each tagging definition into a "look up table"(lut) of its
         # contents, then look for any option names of interest, and process
         # whichever ones are found (similar to above BASE setting derivation)
-        set nam [join [list $nam [string index $t 0]] ""]
+        append nam [string index $t 0]
         array set lut $opts($t)
         foreach op [array names lut -regexp {\-((f|b)g|(fo[rn]|ba))}] {
             # (allow for abbreviations of the tag names)
@@ -710,8 +711,7 @@ proc translit-plot-txtags {twdg} {
             # "look up table"(lut) of its contents, looking for the option
             # names of interest, overlaying values found (same as before)
             #   Note that each new name is a MAPPING into its Chgbar mark
-            set nam [join [list $nam [string map {i + c ! d - o ?} \
-                                                      [string index $t 0]]] ""]
+            append nam [string map {i + c ! d - o ?} [string index $t 0]]
             array set lut $opts($t)
             foreach op [array names lut -regexp {\-((f|b)g|(fo[rn]|ba))}] {
                 # (again, allow for abbreviations of the tag names)
@@ -1092,7 +1092,7 @@ proc scm-detect {fn} {
 ###############################################################################
 proc get-file-rev {fn ndx {r ""} {Scm {}}} {
     global tcl_platform finfo opts g
-    debug-info "get-file-rev ($fn $ndx \"$r\")"
+    debug-info "get-file-rev ($fn $ndx \"$r\" $Scm)"
 
     # Establish SYNTAX of how a revision is specified per the SCM system
     if {"$r" == ""} {
@@ -1334,17 +1334,20 @@ proc sccs-is-bk {} {
 ###############################################################################
 proc get-file {fn ndx} {
     debug-info "get-file ($fn $ndx)"
-    global finfo
+    global g finfo
 
-    if {![file exists $fn]} {
-        fatal-error "File '$fn' does not exist"
+    set msg ""
+    if {[file isfile $fn]} {
+        set finfo(lbl,$ndx) [set finfo(pth,$ndx) "$fn"]
+    } elseif {![file exist $fn]} {
+             set msg "File '$fn' does not exist"
+    } else { set msg "'$fn' exists, but is not a file" }
+
+    # Report errors, but only abort if tool is NOT up and running
+    if {"$msg" != ""} {
+        if {$g(startPhase)} {do-error "$msg"} {fatal-error "$msg"}
         return 1
     }
-    if {[file isdirectory $fn]} {
-        fatal-error "'$fn' is a directory"
-        return 1
-    }
-    set finfo(lbl,$ndx) [set finfo(pth,$ndx) "$fn"]
     return 0
 }
 
@@ -1554,7 +1557,7 @@ proc assemble-args {} {
             #   Some SCMs can produce their OWN list of files 'known' to be
             # different; POSSIBLY with no input whatsoever. So detect the SCM
             # first, THEN (if it is one) let *it* try. All other cases lead
-            # to error msgs (if revs were given), then to interactive input.
+            # to error msgs (if revs were given).
             # Note that DETECTING the SCM is based on the current PROCESS dir
             switch -- [set Scm [scm-detect "."]] {
             GIT {
@@ -1574,7 +1577,7 @@ proc assemble-args {} {
                 } else {
                   set msg "no SCM could be detected for the current directory"
                 }
-              } else {return 0} ;# SCM cant help - request interactive input
+              } else {break} ;# ABORT, but put any PRIOR values back in place
             }
             }
         } elseif {$revs < 2 && $pths == 1} {
@@ -1645,17 +1648,19 @@ proc assemble-args {} {
                         set finfo(lbl,[incr cnt]) [set finfo(pth,$cnt) $f]
                     }
                 }
+                if {$cnt < 2} {
+                    set msg "Both directories have NO filenames in common"
+                }
             } elseif {[file isdirectory $f1]} {
-                foreach f "[set f1 [file join $f1 [file tail $f2]]] $f2" {
-                    if {[file isfile $f]} {
-                        set finfo(lbl,[incr cnt]) [set finfo(pth,$cnt) $f]}
+                if {![get-file [file join $f1 [file tail $f2]] 1]} {incr cnt} {
+                    set msg "Searched file $f2 non-existant in: $f1"
                 }
+                if {![get-file "$f2" 2]} {incr cnt}
             } elseif {[file isdirectory $f2]} {
-                foreach f "$f1 [set f2 [file join $f2 [file tail $f1]]]" {
-                    if {[file isfile $f]} {
-                        set finfo(lbl,[incr cnt]) [set finfo(pth,$cnt) $f]}
+                if {![get-file "$f1" 1]} {incr cnt}
+                if {![get-file [file join $f2 [file tail $f1]] 2]} {incr cnt} {
+                    set msg "Searched file $f1 non-existant in: $f2"
                 }
-
             } else {
                 # Otherwise they MIGHT be Subversion URL paths, or local files
                 if {[regexp {://} $f1]} {
@@ -6105,7 +6110,7 @@ proc rediff {} {
     foreach {txtw lbl ndx} [list LeftText L $i RightText R $j] {
         # When finfo(pth,X) is NOT set yet, its a SCM file that
         # has not yet been obtained -- go get it
-        show-status "reading $finfo(lbl,$ndx)..."
+        show-status "reading $finfo(lbl,$ndx) ..."
         if {![info exists finfo(pth,$ndx)]} {
             if {"" != [set msg [scm-chkget $ndx]]} {do-error "$msg"}
             # finfo(pth,$ndx) is NOW most likely an empty tmpfile
@@ -6476,6 +6481,8 @@ proc main {} {
     }
 
     do-diff
+
+    update-display
 
     # this forces all of the various scrolling windows (line numbers,
     # change bars, etc) to get in sync.
@@ -7576,8 +7583,8 @@ proc write-report {command args} {
                     }
 
                     if {$report(doChangeMarkers$side)} {
-                        append out($side) [string range [expr {$CB ? \
-                                      [join [list $C($side) "  "] ""] : "  "}] 0 1]
+                        append out($side) [string range \
+                                       [expr {$CB ? "$C($side)  " : "  "}] 0 1]
                     }
 
                     if {"$report(doText$side)" != " (no text) "} {
@@ -7861,7 +7868,7 @@ In the third form, a single <cmp>FILE</cmp> containing "conflict markers" will\
 The fourth form is conditional on $g(name) being able to detect a viable SCM\
       system (see below). However, make note that if it <itl>DOES</itl>, it may\
       effectively override the first form described earlier when invoked with\
-      no arguments as is optionally possible as shown here.
+      no arguments as is syntactically shown here.
 
 <hdr>Source Code Control</hdr>
 In all the SCM forms, $g(name) will detect which SCM system to utilize. This\
@@ -7923,10 +7930,9 @@ Lastly, some SCM systems provide utilities that can identify which of their\
 <hdr>Additional hints</hdr>
 With regard to inferred SCM revision fields, invoking $g(name) with no viable\
       arguments at all can result in <itl>either</itl> an SCM trying to supply\
-      such args <bld>OR</bld> presenting the interactive dialog. Moreover, if\
+      such args <bld>OR</bld> presenting the interactive dialog. However, if\
       the SCM <itl>is</itl> tried, but results in not <itl>finding</itl> any\
-      files to compare, the dialog will again likely be the result, barring any\
-      specific errors encounterred.
+      files to compare, only a terminating message will be produced.
 
 If the merge output filename is not specified, $g(name) will present a dialog\
       to allow you to choose the name of the merge output file when attempting\
@@ -8120,6 +8126,8 @@ When a text widget has the focus, you may use the following shortcut keys:
 <cmp>
 	f	First diff
 	c	Center current diff
+	j	Load NEXT file pair (from File->File List)
+	k	Load PREV file pair (from File->File List)
 	l	Last diff
 	n	Next diff
 	p	Previous diff
