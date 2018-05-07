@@ -2461,12 +2461,14 @@ proc compute-inlines {optNam {retag 0}} {
                 foreach {Ls Le P(1) na na P(2)} $g(scrInf,$hID) {break}
 
                 # Determine last UN-padded Lnum, then process L/R line pairs
+                set first $Ls
                 set last [expr {$P(1) ? $Le-$P(1) : $Le-$P(2)}]
                 while {$Ls <= $last} {
                     set s1 "[$w(LeftText)  get $Ls.0 $Ls.end]"
                     set s2 "[$w(RightText) get $Ls.0 $Ls.end]"
 
-                    find-inline-diff-$style($optNam) $hID $Ls $Ls "$s1" "$s2"
+                    find-inline-diff-$style($optNam) $hID \
+                                             [expr {$Ls - $first}] "$s1" "$s2"
                     incr Ls ;# increment line number and iterate
                 }
 
@@ -2544,14 +2546,14 @@ proc lcs-string {s1 off1 len1 s2 off2 len2 lcsoff1_ref lcsoff2_ref} {
     return $longestlen
 }
 
-proc fid-ratcliff-aux {hID l1 l2 s1 off1 len1 s2 off2 len2} {
+proc fid-ratcliff-aux {hID pairID s1 off1 len1 s2 off2 len2} {
     global g
 
     if {$len1 <= 0 || $len2 <= 0} {
         if {$len1 == 0} {
-            lappend g(inline,$hID)  r $l2 $off2 [expr $off2+$len2]
+            lappend g(inline,$hID)  r $pairID $off2 [expr $off2+$len2]
         } elseif {$len2 == 0} {
-            lappend g(inline,$hID)  l $l1 $off1 [expr $off1+$len1]
+            lappend g(inline,$hID)  l $pairID $off1 [expr $off1+$len1]
         }
         return 0
     }
@@ -2568,36 +2570,36 @@ proc fid-ratcliff-aux {hID l1 l2 s1 off1 len1 s2 off2 len2} {
         incr cnt [expr 2*$ret]
         if {$lcsoff1 > $off1 || $lcsoff2 > $off2} {
             # left
-            incr cnt [fid-ratcliff-aux $hID $l1 $l2 \
+            incr cnt [fid-ratcliff-aux $hID $pairID \
                         $s1 $off1 [expr $lcsoff1-$off1] \
                         $s2 $off2 [expr $lcsoff2-$off2]]
 
         }
         if {$rightoff1<$off1+$len1 || $rightoff2<$off2+$len2} {
             # right
-            incr cnt [fid-ratcliff-aux $hID $l1 $l2 \
+            incr cnt [fid-ratcliff-aux $hID $pairID \
                         $s1 $rightoff1 [expr $off1+$len1-$rightoff1] \
                         $s2 $rightoff2 [expr $off2+$len2-$rightoff2]]
         }
     } else {
-        lappend g(inline,$hID)  r $l2 $off2 [expr $off2+$len2]
-        lappend g(inline,$hID)  l $l1 $off1 [expr $off1+$len1]
+        lappend g(inline,$hID)  r $pairID $off2 [expr $off2+$len2]
+        lappend g(inline,$hID)  l $pairID $off1 [expr $off1+$len1]
         incr cnt
     }
     return $cnt
 }
 
-proc find-inline-diff-ratcliff {hID l1 l2 s1 s2} {
+proc find-inline-diff-ratcliff {hID pairID s1 s2} {
     global g
 
     if {[set len1 [string length $s1]] && [set len2 [string length $s2]] } {
-        return [fid-ratcliff-aux $hID $l1 $l2 $s1 0 $len1 $s2 0 $len2]
+        return [fid-ratcliff-aux $hID $pairID $s1 0 $len1 $s2 0 $len2]
     }
     if {![info exists g(inline,$hID)]} {set g(inline,$hID) [list]}
     return 0
 }
 
-proc find-inline-diff-byte {hID l1 l2 s1 s2} {
+proc find-inline-diff-byte {hID pairID s1 s2} {
     global g
 
     if {![set len1 [string length $s1]] || ![set len2 [string length $s2]] } {
@@ -2613,8 +2615,8 @@ proc find-inline-diff-byte {hID l1 l2 s1 s2} {
             # start/continue a NON-diff region
             if {$size} {
                 # which ENDS a diff region
-                lappend g(inline,$hID)  r $l2 [expr $i-$size] $i
-                lappend g(inline,$hID)  l $l1 [expr $i-$size] $i
+                lappend g(inline,$hID)  r $pairID [expr $i-$size] $i
+                lappend g(inline,$hID)  l $pairID [expr $i-$size] $i
                 set size 0
                 incr cnt
             }
@@ -2622,8 +2624,8 @@ proc find-inline-diff-byte {hID l1 l2 s1 s2} {
     }
     if {$size} {
         # ended in a diff region
-        lappend g(inline,$hID)  r $l2 [expr $i-$size] $len2
-        lappend g(inline,$hID)  l $l1 [expr $i-$size] $len1
+        lappend g(inline,$hID)  r $pairID [expr $i-$size] $len2
+        lappend g(inline,$hID)  l $pairID [expr $i-$size] $len1
         incr cnt
     }
     return $cnt
@@ -5759,12 +5761,15 @@ proc mark-diffs {{rmvrpl {}}} {
             set result [incr g(count)]
             #  (simply making 'result' be non-null permits adding to comboBox)
 
-            # However, EXISTING hunks PAST the injected entries also likely
-            # will need some minor realignments:
-            foreach {S E Pl na Cl Pr na Cr} $g(scrInf,$d) {break}
+            # However, EXISTING hunks PAST the injected entries will require
+            # some minor realignments:
+            foreach {S E Pl na Cl Pr Or Cr} $g(scrInf,$d) {break}
             #   a) "scrInf,*" Ofst fields MUST be rewritten to the NEW deltas
-            #   b) bookmarked hunks likely need their labels renumbered
+            #      likewise the S & E fields must adjust to the new delta SUM
+            #   b) if bookmarked, the hunk requires its label renumbered
             if {$inject < $g(count)} {
+                set S [expr {$delta(2) - $Or + $S}]
+                set E [expr {$delta(2) - $Or + $E}]
                 set g(scrInf,$d) \
                               [list $S $E $Pl $delta(1) $Cl $Pr $delta(2) $Cr]
                 diffmark $d $g(count)
@@ -5878,11 +5883,11 @@ proc mark-diffs {{rmvrpl {}}} {
             if {"$type" == "c" && ($opts(showinline1) || $opts(showinline2))} {
                 while {$s(1) <= $e(1)} {
                     if {$opts(showinline1)} {
-                        find-inline-diff-byte $d $s(1) $s(1) \
+                        find-inline-diff-byte $d [expr {$s(1) - $s(2)}] \
                                [$w(LeftText)  get $s(1).0 $s(1).end] \
                                [$w(RightText) get $s(1).0 $s(1).end]
                     } else {
-                        find-inline-diff-ratcliff $d $s(1) $s(1) \
+                        find-inline-diff-ratcliff $d [expr {$s(1) - $s(2)}] \
                                [$w(LeftText)  get $s(1).0 $s(1).end] \
                                [$w(RightText) get $s(1).0 $s(1).end]
                     }
@@ -6061,8 +6066,9 @@ proc remark-inline {hID {reCfgSkew true}} {
     set wdg(r) "RightText"
 
     # Presumes 'inlinetag' was ALREADY removed from BOTH Text widgets
-    foreach {side line startcol endcol} $g(inline,$hID) {
-        add-tag $w($wdg($side)) inlinetag $line $startcol $endcol
+    foreach {Lno} $g(scrInf,$hID) {break}
+    foreach {side lndx startcol endcol} $g(inline,$hID) {
+        add-tag $w($wdg($side)) inlinetag [incr lndx $Lno] $startcol $endcol
     }
     de-skew-hunk $hID $reCfgSkew
 }
