@@ -939,30 +939,6 @@ proc plot-line-info {side args} {
 }
 
 ###############################################################################
-# Pop up a window for file merge.
-###############################################################################
-proc popup-merge {{writeproc merge-write-file}} {
-    debug-info "popup-merge ($writeproc)"
-    global g
-    global w
-    global opts
-
-    if {$g(mergefileset)} {
-        $writeproc
-        return
-    }
-
-    set path [tk_getSaveFile -defaultextension "" \
-      -filetypes $opts(filetypes) \
-      -initialfile [file nativename $g(mergefile)]]
-
-    if {[string length $path] > 0} {
-        set g(mergefile) $path
-        $writeproc
-    }
-}
-
-###############################################################################
 # Split a file containing CVS conflict markers into two temporary files
 #    name        Name of file containing conflict markers
 # Returns the names of the two temporary files and the names of the
@@ -1167,20 +1143,18 @@ proc get-file-rev {fn ndx {r ""} {Scm {}}} {
         }
     GIT {
         append cmd "git" $cmdsfx
-        # Won't work if you aren't actually in the work tree
-        if {![is-git-repository]} {
-           set msg "Please start in a git work tree."
-           break
-        }
-        debug-info "exec $cmd rev-parse --show-prefix"
-        set prefix [exec $cmd rev-parse --show-prefix]
-        if {"$r" == "" || " " == [string index "$r" 0]} {
-            set finfo(lbl,$ndx) "$fn (GIT--staged)" ;# STAGEd vrsn
-            set finfo(tmp,$ndx) "exec $cmd show \":$prefix$fn\""
-        } else {
-            set finfo(lbl,$ndx) "$fn (GIT $rev)" ;# REQSTd vrsn
-            set finfo(tmp,$ndx) "exec $cmd show \"$gitopt$prefix$fn\""
-        }
+        # Won't work if you aren't actually INSIDE the work tree
+        if {[is-git-repository]} {
+            debug-info "exec $cmd rev-parse --show-prefix"
+            set prefix [exec $cmd rev-parse --show-prefix]
+            if {"$r" == "" || " " == [string index "$r" 0]} {
+                set finfo(lbl,$ndx) "$fn (GIT--staged)" ;# STAGEd vrsn
+                set finfo(tmp,$ndx) "exec $cmd show \":$prefix$fn\""
+            } else {
+                set finfo(lbl,$ndx) "$fn (GIT $rev)" ;# REQSTd vrsn
+                set finfo(tmp,$ndx) "exec $cmd show \"$gitopt$prefix$fn\""
+            }
+        } {set msg "Please re-start from within a Git work tree."}
         }
     BK {
         append cmd "bk" $cmdsfx
@@ -1462,7 +1436,7 @@ proc commandline {} {
         # own list of difference candidates when NO ARGS have been provided
         # Generally this results in HEAD .vs. 'sandbox' (aka 'working copy')
         switch -- [scm-detect "."] {
-	    SVN -
+            SVN -
             GIT { incr revs }
         }
     }
@@ -1577,7 +1551,7 @@ proc assemble-args {} {
                 } else {
                   set msg "no SCM could be detected for the current directory"
                 }
-              } else {break} ;# ABORT, but put any PRIOR values back in place
+              }
             }
             }
         } elseif {$revs < 2 && $pths == 1} {
@@ -1706,12 +1680,25 @@ proc alignDecor {pairnum} {
     set finfo(title) \
         "[file tail $finfo(lbl,$ndx(1))] .vs. [file tail $finfo(lbl,$ndx(2))]"
 
-    set rootname [file rootname $finfo(pth,$ndx(1))]
-    set suffix [file extension $finfo(pth,$ndx(1))]
+    # Unlock a preset mergefile name if the CURRENT pairing COULD be arbitrary
+    if {$finfo(fPairs) > 1} {set g(mergefileset) 0}
+
+    # Guess the best 'mergefile' name for the CURRENT pairing (if not preset)
     if {! $g(mergefileset)} {
+        # If BOTH are tmpfiles, lets go with just the file itself in the CWD...
+        if {[info exist finfo(tmp,$ndx(1))]&&[info exist finfo(tmp,$ndx(2))]} {
+            set rootname [file rootname [file tail $finfo(pth,$ndx(1))]]
+            set suffix [file extension $finfo(pth,$ndx(1))]
+        } else {
+            # ...or lets pair it to the NON-tempfile location (Left preferred)
+            if {[info exists finfo(tmp,$ndx(1))]} {set i 2} {set i 1}
+            set rootname [file rootname $finfo(pth,$ndx($i))]
+            set suffix [file extension $finfo(pth,$ndx($i))]
+        }
         set g(mergefile) [file join [pwd] "${rootname}-merge$suffix"]
     }
     set g(initOK) 1
+    debug-info "MergeFileSet($g(mergefileset)): $g(mergefile)"
 
     wm title . "$finfo(title) - $g(name) $g(version)"
     return 0
@@ -2361,6 +2348,17 @@ proc build-client {} {
     bind $w(mapCanvas) <ButtonPress-1> [list handleMapEvent B1-Press %y]
     bind $w(mapCanvas) <Button1-Motion> [list handleMapEvent B1-Motion %y]
     bind $w(mapCanvas) <ButtonRelease-1> [list handleMapEvent B1-Release %y]
+
+    # Again, wheel scrolling over the MAP window SHOULD also work
+    # - but can only target the THEN g(activeWindow) text widget
+    foreach evt {Button-4 Button-5 Shift-Button-4 Shift-Button-5} {
+        eval bind $w(mapCanvas) <$evt> \
+           "{event generate \$g(activeWindow) <$evt> -when head}"
+    }
+    foreach evt {MouseWheel Shift-MouseWheel} {
+        eval bind $w(${side}Info) <$evt> \
+           "{event generate \$g(activeWindow) <$evt> -delta %D -when head}"
+    }
 
     # this is a grip for resizing the sides relative to each other.
     button $w(client).grip -borderwidth 3 -relief raised \
@@ -3071,12 +3069,14 @@ proc build-menubar {} {
     menu $mergeMenu
     $mergeMenu add checkbutton -label "Show Merge Window" -underline 9 \
       -variable g(showmerge) -command "do-show-merge 1"
-    $mergeMenu add command -label "Write Merge File..." -underline 6 \
-      -command popup-merge
+    $mergeMenu add command -underline 6 -command merge-write-file -label \
+      [expr {$g(mergefileset) ? "Write Merge File" : "Write Merge File..."}]
     set "g(tooltip,Show Merge Window)" "Pops up a window showing the current\
        merge results"
-    set "g(tooltip,Write Merge File...)" "Write the merge file to disk. You will\
-       be prompted for a filename"
+    set "g(tooltip,Write Merge File...)" "Write the merge file to disk. You\
+       will be prompted to confirm the filename first"
+    set "g(tooltip,Write Merge File)" "Write the merge file to disk USING the\
+       command line specified name"
 
     # Help menu. If you change, add or remove labels, be sure and
     # update the tooltips.
@@ -4147,6 +4147,9 @@ proc customize-selectPage {{frame {}}} {
 proc customize-initLabels {} {
     global pref
 
+    # But it only need be done once
+    if {[info exists pref(diffcmd)]} return
+
     set pref(diffcmd) {diff command}
     set pref(ignoreblanksopt) {Ignore blanks option}
     set pref(ignoreblanks) {Ignore blanks when diffing}
@@ -4787,14 +4790,22 @@ proc do-show-merge {{showMerge ""}} {
         set g(showmerge) $showMerge
     }
 
+    # Re-cfg buttons to hint at state of intended Merge FILENAME (when visible)
     if {$g(showmerge)} {
-        wm deiconify $w(merge)
-        $w(mergeText) configure -state disabled ;# for paranoia's sake
-        focus -force $w(mergeText)
-        merge-center
-    } else {
-        wm withdraw $w(merge)
-    }
+        if {$g(mergefileset)} {
+            $w(mergeWriteAndExit) configure -text "Save & Exit"
+            $w(mergeWrite) configure -text "Save"
+        } else {
+            $w(mergeWriteAndExit) configure -text "Save & Exit..."
+            $w(mergeWrite) configure -text "Save..."
+        }
+        if {![winfo ismapped $w(merge)]} {
+            wm deiconify $w(merge)
+            $w(mergeText) configure -state disabled ;# for paranoia's sake
+            focus -force $w(mergeText)
+            merge-center
+        }
+    } elseif {[winfo ismapped $w(merge)]} { wm withdraw $w(merge) }
 }
 
 ###############################################################################
@@ -4823,14 +4834,12 @@ proc build-merge-preview {} {
     frame $top.frame -bd 1 -relief sunken
     pack $top.frame -side top -fill both -expand y -padx 10 -pady 10
 
+    # Certain widgets need external handles, remainder are local
     set w(mergeText) $top.frame.text
     set w(mergeVSB) $top.frame.vsb
     set w(mergeHSB) $top.frame.hsb
-    set w(mergeDismiss) $top.dismiss
     set w(mergeWrite) $top.mergeWrite
     set w(mergeWriteAndExit) $top.mergeWriteAndExit
-    set w(mergeExit) $top.mergeExit
-    set w(mergeRecenter) $top.mergeRecenter
 
     # Window and scrollbars
     scrollbar $w(mergeHSB) -orient horizontal -command [list $w(mergeText) \
@@ -4851,37 +4860,29 @@ proc build-merge-preview {} {
     grid columnconfigure $top.frame 1 -weight 0
 
     # buttons
-    button $w(mergeRecenter) -width 8 -text "ReCenter" -underline 0 \
-      -command merge-center
+    button $top.mRecenter -width 8 -text "ReCenter" -underline 0 \
+        -command merge-center
 
-    button $w(mergeDismiss) -width 8 -text "Dismiss" -underline 0 \
-      -command "do-show-merge 0"
+    button $top.mDismiss -width 8 -text "Dismiss" -underline 0 \
+        -command "do-show-merge 0"
 
-    if {$g(mergefileset)} {
-        button $w(mergeWrite) -width 8 -text "Save" -underline 0 \
-          -command [list popup-merge merge-write-file]
-        button $w(mergeWriteAndExit) -width 8 -text "Save & Exit" \
-          -underline 8 -command {
-            popup-merge merge-write-file
-            exit
-        }
-    } else {
-        button $w(mergeWrite) -width 8 -text "Save..." -underline 0 \
-          -command [list popup-merge merge-write-file]
-        button $w(mergeWriteAndExit) -width 10 -text "Save & Exit..." \
-          -underline 8 -command {
-            popup-merge merge-write-file
-            exit
-        }
-    }
-    button $w(mergeExit) -width 8 -text "Exit $g(name)" -underline 0 \
-      -command {exit}
+    button $top.mExit -width 8 -text "Exit $g(name)" -underline 0 \
+        -command {exit}
 
-    pack $w(mergeDismiss) -side right -pady 5 -padx 10
-    pack $w(mergeRecenter) -side right -pady 5 -padx 1
+    # These last two buttons NAMES are later re-cfg'd with "..." appended
+    # when g(mergefileset)==0 to signify a file browser popup will occur
+    # (provided the merge window itself is actually visible)
+    button $w(mergeWrite) -width 8 -text "Save" -underline 0 \
+        -command {merge-write-file}
+
+    button $w(mergeWriteAndExit) -width 8 -text "Save & Exit" \
+        -underline 8 -command {merge-write-file 1 }
+
+    pack $top.mDismiss -side right -pady 5 -padx 10
+    pack $top.mRecenter -side right -pady 5 -padx 1
     pack $w(mergeWrite) -side right -pady 5 -padx 1
     pack $w(mergeWriteAndExit) -side right -pady 5 -padx 1
-    pack $w(mergeExit) -side right -pady 5 -padx 1
+    pack $top.mExit -side right -pady 5 -padx 1
 
     eval $w(mergeText) configure $opts(textopt)
     foreach tag {difftag currtag} {
@@ -4903,16 +4904,30 @@ proc build-merge-preview {} {
 }
 
 ###############################################################################
-# Write merge preview to file
+# Write merge preview to file (after optionally confirming filename)
 ###############################################################################
-proc merge-write-file {} {
-    global g
-    global w
+proc merge-write-file {{andExit 0}} {
+    global g w opts
+    debug-info "merge-write-file \
+        ([expr {$g(mergefileset) ? "into" : "confirming" }] $g(mergefile))"
 
+    if {!$g(mergefileset)} {
+        set path [tk_getSaveFile -initialfile [file nativename $g(mergefile)] \
+              -defaultextension "" -filetypes $opts(filetypes) \
+	      -parent [expr {[winfo ismap $w(merge)]? $w(merge) : $w(client)}]]
+
+        if {[string length $path] > 0} {
+            set g(mergefile) $path
+        } else return ;# file browser cancelled out - DO NOT WRITE or EXIT
+     }
+
+    # Actually write merge output to the given filename
     set hndl [open "$g(mergefile)" w]
-    set text [$w(mergeText) get 1.0 end-1lines]
-    puts -nonewline $hndl $text
+    set txt [$w(mergeText) get 1.0 end-1lines]
+    puts -nonewline $hndl $txt
     close $hndl
+
+    if {$andExit} do-exit
 }
 
 ###############################################################################
@@ -5393,7 +5408,8 @@ proc update-display {} {
         $w(fileMenu) entryconfigure "Recompute*" -state disabled
 
         $w(mergeMenu) entryconfigure "Show*" -state disabled
-        $w(mergeMenu) entryconfigure "Write*" -state disabled
+        $w(mergeMenu) entryconfigure "Write*" -state disabled -label \
+         [expr {$g(mergefileset) ? "Write Merge File" : "Write Merge File..."}]
 
         $w(markMenu) entryconfigure "Mark*" -state disabled
         $w(markMenu) entryconfigure "Clear*" -state disabled
@@ -5425,7 +5441,8 @@ proc update-display {} {
         $w(fileMenu) entryconfigure "Recompute*" -state normal
 
         $w(mergeMenu) entryconfigure "Show*" -state normal
-        $w(mergeMenu) entryconfigure "Write*" -state normal
+        $w(mergeMenu) entryconfigure "Write*" -state normal -label \
+         [expr {$g(mergefileset) ? "Write Merge File" : "Write Merge File..."}]
 
         # Hmmm.... on my Mac the combobox flashes if we don't add this
         # check. Is this a bug in AquaTk, or in my combobox... :-|
@@ -5934,11 +5951,10 @@ proc do-new-diff {} {
     #foreach inf [lsort [array names finfo]] \
         { debug-info "    $inf: $finfo($inf)" }
 
-    # Forget the PRESENT mergefile settings, then ...
+    # Unlock the PRESENT mergefile settings (but leave name for now), then ...
     # Pop up the dialog to collect the args and form them together
     # into a command - bailing out if Dialog cancels or args is malformed
     set g(mergefileset) 0
-    set g(mergefile) ""
     if {![newDiffDialog] || ![assemble-args]} return
 
     #foreach inf [lsort [array names finfo]] \
@@ -6123,7 +6139,8 @@ proc rediff {} {
         }
         if {[catch {set hndl [open "$finfo(pth,$ndx)" r]}]} {
             fatal-error "Failed to open file: $finfo(pth,$ndx)"
-        }
+        } else {fconfigure $hndl -translation \
+            [expr {"$::tcl_platform(platform)" == "windows" ? "crlf" : "lf"}]}
         $w($txtw) insert 1.0 [read $hndl]
         # Must also replace the merge window contents (w/Left contents)
         if {"$lbl" == "L"} {
@@ -6373,7 +6390,7 @@ proc do-diff {} {
 # Convert from hunk-index
 #   a 1-based monotonic difference position (called a hunk)
 # to hunk-id
-#   a diff-encoded (nnn[acd]mmm)d descriptive format
+#   a diff-encoded (nnn[acd]mmm) descriptive format
 ###############################################################
 proc hunk-id { ndx } {
     global g
@@ -6384,7 +6401,7 @@ proc hunk-id { ndx } {
 
 ###############################################################
 # Convert from hunk-id
-#   a diff-encoded (nnn[acd]mmm)d descriptive format
+#   a diff-encoded (nnn[acd]mmm) descriptive format
 # to hunk-ndx
 #   a 1-based monotonic difference position (called a hunk)
 ###############################################################
@@ -6611,9 +6628,6 @@ proc newDiffDialog {} {
     global finfo
     global waitvar
 
-    set g(mergefile) ""
-    set g(mergefileset) 0
-
     set waitvar {}
 
     if {![info exists w(newDiffPopup)]} {
@@ -6801,9 +6815,10 @@ proc close-more-options {} {
     grid remove $w(newDiffPopup).options.l2l
     grid remove $w(newDiffPopup).options.l2e
 
-    set g(mergefileset) ""
-    set g(conflictset) ""
-    set g(ancfileset) ""
+    set g(conflictset) 0
+    set g(mergefileset) 0
+    set g(mergefile) ""
+    set g(ancfileset) 0
     set g(ancfile) ""
     set finfo(ulbl,1) ""
     set finfo(ulbl,2) ""
@@ -7858,6 +7873,12 @@ In the first form, $g(name) will generally present a dialog to allow you to\
       really need a directory, try browsing to some file in the desired\
       directory, accept THAT, then just erase the filename from the end of the\
       dialog entry box where it is deposited (or just type it yourself).
+      Please note that the "Additional Optional parameters"\
+      <itl>are available</itl> from the dialog, but are initially hidden from\
+      view, as they are often not applicable except in special cases. If you\
+      need to set them, <bld>do not</bld> re-"hide" them before clicking the\
+      <btn>Ok</btn> button on the dialog as hiding them <itl>ALSO</itl> causes\
+      them ALL to become completely <bld>unset</bld>.
 
 In the second form, either or both <cmp>FILESPEC</cmp>s may be to a local file\
       or directory, or symbolic links to such. When a directory is involved,\
@@ -7940,16 +7961,37 @@ With regard to inferred SCM revision fields, invoking $g(name) with no viable\
       the SCM <itl>is</itl> tried, but results in not <itl>finding</itl> any\
       files to compare, only a terminating message will be produced.
 
-If the merge output filename is not specified, $g(name) will present a dialog\
-      to allow you to choose the name of the merge output file when attempting\
-      to write.
-
 It is <itl>NOT</itl> recommended to specify an <cmp>ANCESTORFILE</cmp>,\
       <cmp>MERGEOUTPUTFILE</cmp> or more than two "-L File-label" options when\
       using any form that will resolve to more than a <itl>single</itl> diff\
       pair (i.e. generally when a directory <cmp>FILESPEC</cmp> is paired\
       against anything but a <cmp>FILESPEC</cmp> that is a single\
-      <cmp>FILE</cmp>). It will likely produce <itl>undesired</itl> results.
+      <cmp>FILE</cmp>). It will likely produce <itl>undesired</itl> results,\
+      an example of which is outlined as follows:
+      If the merge output filename is not specified, $g(name) will present a\
+      dialog to allow you to choose a name for that file when attempting to\
+      write it. This is actually the simplest method of operation. If you\
+      <itl>do</itl> choose to provide a name (via the command line\
+      <itl>or</itl> the <btn>New Diff</btn> dialog window) $g(name) will\
+      <bld>try</bld> to honor it. But there is a strong possibility you may\
+      be asked to reconfirm that name <itl>OR</itl> be presented with an\
+      entirely new name when you attempt to write it. This generally occurs\
+      when $g(name) detects that multiple file pairs are in use, which might\
+      result in cross associating the single given merge output name to an\
+      indeterminate file pair. Of course, you may <itl>at that point</itl> then\
+      choose whatever filename you wish.
+      In a similar way, nearly all of the "Additional Optional parameters"\
+      shown are intended for use when $g(name) is invoked to process a\
+      <itl>SINGLE</itl> file pair, as was its original historical heritage. 
+
+As an additional note regarding the $g(name) "<itl>suggested</itl>" merge file\
+      output names, be advised that $g(name) will try to fabricate a name that\
+      derives from the filename used in the Left window, unless that file\
+      itself derives from an SCM system, in which case it will try to choose\
+      its name from that of the Right window. When BOTH windows represent SCM\
+      files, it will aim for the current directory that $g(name) was invoked\
+      from. Regardless of the <itl>default</itl> name presented, you may, of\
+      course, place the output in any filename you designate.
 
 Finally, note that anything with a leading dash that is <itl>not</itl>\
       recognized as a $g(name) option is passed through to diff.  This\
@@ -7970,19 +8012,22 @@ Finally, note that anything with a leading dash that is <itl>not</itl>\
 }
 
 ###############################################################################
-# Throw up a help window.
+# Throw up a help window for the GUI.
 ###############################################################################
 proc do-help {} {
-    global g
+    global g pref
+
+    customize-initLabels ;# Needed for access to global 'pref' array
 
     set title "How to use the $g(name) GUI"
     set text {
 <hdr>Layout</hdr>
 
-The top row contains the File, Edit, View, Mark, Merge and Help menus. The\
-      second row contains a toolbar which contains navigation and merge\
-      selection tools.  Below that is the labels which identify the contents\
-      of each text window.
+The top row contains the <btn>File</btn>, <btn>Edit</btn>, <btn>View</btn>,\
+      <btn>Mark</btn>, <btn>Merge</btn> and <btn>Help</btn> menus. The second\
+      row contains a toolbar which contains navigation and merge selection\
+      tools. Below that are labels which identify the contents for each of the\
+      two text windows that follow just below them.
 
 The left-most text widget displays the contents of <cmp>FILE1</cmp>, the most\
       recently checked-in revision, <cmp>REV</cmp> or <cmp>REV1</cmp>,\
@@ -8029,7 +8074,11 @@ You may also select any highlighted diff region as the current diff region by\
 1. From the <btn>File</btn> menu:
 
 The <btn>New...</btn> item displays a dialog where you may choose two files\
-      to compare. Selecting "Ok" from the dialog will diff the two files. The\
+      to compare. Selecting "Ok" from that dialog will diff the two files. Be\
+      advised that this is the same dialog as may appear when $g(name) is\
+      started with no command line parameters given, and its described\
+      behavior there is the same as invoking it from this context (see the\
+      help topic "On Command Line" for specific details). Next, the\
       <btn>File List</btn> item will only be active when the current $g(name)\
       command parameters yeilds more than a single pairing of files to compare;\
       pressing it produces a submenu list of the other available comparisons.\
@@ -8042,10 +8091,10 @@ The <btn>New...</btn> item displays a dialog where you may choose two files\
       if the files each represents requires network access to be processed;\
       however, once loaded, subsequent reloading is entirely a local task. The\
       <btn>Recompute Diffs</btn> item recomputes the differences between the\
-      two files whose names appear at the top of the <itl>$g(name)</itl>\
-      window. The <btn>Write Report...</btn> item lets you create a report\
+      two files whose names appear above each of the two text display windows.\
+      The <btn>Write Report...</btn> item lets you create a report\
       file that contains various information visible in the windows. Lastly,\
-      the <btn>Exit</btn> item terminates <itl>$g(name)</itl>.
+      the <btn>Exit</btn> item terminates $g(name).
 
 2. From the <btn>Edit</btn> menu:
 
@@ -8081,10 +8130,17 @@ The <btn>Mark Current Diff</btn> creates a new toolbar button that will jump\
 
 5. From the <btn>Merge</btn> menu:
 
-The <btn>Show Merge Window</btn> button pops up a window with the current\
-      merged version of the two files. The <btn>Write Merge File</btn> button\
-      will allow you to save the contents of that window\
-      to a file.
+The <btn>Show Merge Window</btn> item pops up a window with the current\
+      merged version of the two files. This will be described further in a\
+      section called "Merge Preview" below. The <btn>Write Merge File</btn>\
+      item (or possibly the <btn>Write Merge File...</btn>) will allow you to\
+      save the contents of that window to a file.
+      Pay special attention to the existance of those three trailing dots when\
+      electing to write the Merge File (either here <itl>OR</itl> from the\
+      buttons on the popup window) - if they are <bld>NOT</bld> present,\
+      it means $g(name) <itl>already knows</itl> what filename to produce,\
+      (i.e. from the command line) and you will not be given a chance to\
+      confirm or alter that name.
 
 6. From the <btn>Help</btn> menu:
 
@@ -8096,10 +8152,14 @@ The <btn>About $g(name)</btn> item displays copyright and author\
 
 7. From the toolbar:
 
+(Be advised that in these explanations, many button descriptions refer to the\
+      <itl>textual</itl> name <bld>ON</bld> that button as would be seen when\
+      the user preference to "$pref(toolbarIcons)" is unset.)
+
 The first tool is a dropdown list of all of the differences in a standard\
       diff-type format. You may use this list to go directly to any diff\
       record. Further navigation tools will be described in due turn.  The\
-      next tool, <btn>Recompute Diff</btn>, simply re-starts the diff of the\
+      next tool, <btn>Rediff</btn>, simply re-computes the diff of the\
       CURRENT two files from scratch as if it was a New Diff. This could be\
       appropriate if you have invoked an editor on either file since starting\
       and now wish to see the net effects of your editting. The following two\
@@ -8117,21 +8177,22 @@ The remaining tools on the toolbar consist of the <btn>Find</btn> tool for\
 
 <hdr>Navigation tools</hdr>
 
-      The <btn>Next</btn> and <btn>Previous</btn>\
-      buttons take you to the "next" and "previous" DR, respectively. The\
-      <btn>First</btn> and <btn>Last</btn> buttons take you to the\
-      "first" and "last" DR. The <btn>Center</btn> button centers the\
-      CDRs in their respective text windows. You can set <btn>Auto\
-      Center</btn> in <btn>Preferences</btn> to do this automatically for you\
-      as you navigate through the diff records.
+      The <btn>Next</btn> and <btn>Previous</btn> buttons take you to the\
+      "next" and "previous" DR, respectively. The <btn>First</btn> and\
+      <btn>Last</btn> buttons take you to the "first" and "last" DR. These\
+      actions will <itl>also</itl> affect the Merge Window (when displayed).\
+      The <btn>Center</btn> button centers the CDRs in their respective text\
+      windows. You can also set <btn>Auto Center</btn> in\
+      <btn>Preferences</btn> to do this automatically for you as you navigate\
+      through the diff records.
 
 
 <hdr>Keyboard Navigation</hdr>
 
 When a text widget has the focus, you may use the following shortcut keys:
 <cmp>
-	f	First diff
 	c	Center current diff
+	f	First diff
 	j	Load NEXT file pair (from File->File List)
 	k	Load PREV file pair (from File->File List)
 	l	Last diff
@@ -8149,18 +8210,19 @@ The cursor, Home, End, PageUp and PageDown keys work as expected, adjusting\
 
 To scroll the text widgets independently, make sure <btn>Synchronize\
       Scrollbars</btn> in <btn>Preferences</btn> is off. If it is on,\
-      scrolling any text widget scrolls all others. Scrolling does not\
-      change the current diff record (CDR). A Mouse scroll-wheel is also\
+      scrolling either text widget scrolls the other. Scrolling does not\
+      change the current diff record (CDR), nor will it cause the Merge\
+      Window (if displayed) to scroll. A Mouse scroll-wheel is also\
       recognized for scrolling vertically, or, if the <cmp>Shift</cmp> key\
       is simultaneously pressed, horizontally, as well.
 
 <hdr>Diff Marks</hdr>
 
 You can set "markers" at specific diff regions for easier navigation. To do\
-      this, click on the <btn>Set Mark</btn> button. It will create a new\
-      toolbar button that will jump back to this diff\
+      this, click on the <btn>Set</btn> Mark button. It will create a new\
+      toolbar button that will jump back to this specific diff\
       region. To clear a diff mark, go to that diff record and click on the\
-      <btn>Clear Mark</btn> button.
+      <btn>Clear</btn> Mark button.
 
 <hdr>Diff Map</hdr>
 
@@ -8171,30 +8233,36 @@ The diff map is a map of all the diff regions. It is shown in the middle of\
       red, Insert as green and Change as blue. In the case of a 3-way merge,\
       overlap regions are marked in yellow. The height of each patch\
       corresponds to the relative size of the diff region. A\
-      thumb lets you interact with the map as if it were a scrollbar.
-      All diff regions are drawn on the map even if too small to be visible.\
-      For large files with small diff regions, this may result in patches\
-      overwriting each other.
+      thumb lets you interact with the map as if it were a scrollbar, and\
+      Mouse scroll-wheel actions are fully supported, but will be\
+      <itl>directed</itl> to whichever of the two text windows is holding\
+      the current input focus. All diff regions are drawn on the map even\
+      if too small to be visible. For large files with small diff regions,\
+      this may result in patches overwriting each other.
 
 <hdr>Merging</hdr>
 
-To merge the two files, go through the difference regions (via "Next",\
-      "Prev" or whatever other means you prefer) and select "<bld>L</bld>"\
-      (for "Left") or "<bld>R</bld>" (for "Right"), located adjacent to the\
-      "Merge Choice:" label, assigning which side should be used for each.\
-      Selecting "Left" means that the the left-most file's version of the\
-      difference will be used in creating the final result; choosing "Right"\
-      means that the right-most file's difference will be used.
-      Each choice is recorded, and can be changed arbitrarily many times.\
+To merge the two files, go through the difference regions (via <btn>Next</btn>,\
+      <btn>Prev</btn> or whatever other means you prefer) and select\
+      <btn>L</btn> (for "Left") or <btn>R</btn> (for "Right"), located\
+      adjacent to the toolbar "Merge Choice:" label, assigning which side\
+      should be used for each. Selecting "Left" means that the the left-most\
+      file's version of the difference will be used in creating the final\
+      result; choosing "Right" means that the right-most file's difference is\
+      used. Each choice is recorded, and can be changed arbitrarily many times.\
       If you need pieces from BOTH the Left AND Right versions you may choose\
-      the "<bld>LR</bld>" or "<bld>RL</bld>" (Left-then-Right or\
+      the <btn>LR</btn> or <btn>RL</btn> (Left-then-Right or\
       Right-then-Left, respectively) choices instead, <itl>but then</itl> you\
-      must remember to edit the merged result AFTER you commit it to disk.\
-      This might be useful, for example, if <itl>both</itl> variations should\
-      exist with additional wording, or in the case of source coding, a\
+      must remember to edit the merged result <bld>AFTER</bld> you commit it to\
+      disk. This might be useful, for example, if <itl>both</itl> variations\
+      should exist with additional wording, or in the case of source coding, a\
       conditional inclusion macro, surrounding the entire result. To commit\
-      the final, merged result to disk, choose "Write Merge File..." from the\
-      <btn>Merge</btn> menu.
+      the final, merged result to disk, choose <btn>Write Merge File</btn>\
+      from the <btn>Merge</btn> menu, or one of the <btn>Save</btn> buttons\
+      provided on the "Merge Window" (if it is displayed). Remember that all\
+      these items may be labelled with a trailing "..." if $g(name) is\
+      <itl>uncertain</itl> of what the target filename should be, thereby\
+      providing a file browser dialog to either specify and/or confirm the name.
 
 <hdr>Merging - in more detail</hdr>
 
@@ -8239,17 +8307,25 @@ Oftentimes, you may find that the "Diff" program has packed several lines\
       ever counted toward the occupancy of the regions. Padding lines\
       (displayed to align CDRs on screen) mean nothing despite their being\
       highlighted as part of a CDR, and will be <itl>stepped over</itl> as\
-      edges are moved.
+      edges are moved. Finally, remember that any changes <itl>YOU</itl> might\
+      make to any CDR content is transitory, and only exists within $g(name)\
+      until the next time any "Diff" is invoked, even a <btn>Rediff</btn>.
 
 <hdr>Merge Preview</hdr>
 
-To see a preview of the file that would be written by "Write Merge File...",\
-      select "Show Merge Window" in the View menu. A separate window is shown\
-      containing the preview. It is updated as you\
-      change merge choices. It is synchronized with the other text widgets if\
-      "Synchronize Scrollbars" is on.
+To see a preview of the file that would be written by\
+      <btn>Write Merge File</btn>, select <btn>Show Merge Window</btn> in the\
+      <btn>View</btn> menu. A separate window will be shown containing the\
+      preview. It is updated as you select merge choices.  It is also\
+      synchronized with the other text widgets when\
+      <btn>Synchronize Scrollbars</btn> is on, at least as far as actions that\
+      <itl>change</itl> the CDR, but it will <bld>not</bld> actually\
+      <itl>scroll</itl> in unison with the other windows, primarily because\
+      as a representation of the eventual Merge file, it does NOT HAVE any\
+      <itl>padding</itl> lines which accounts for a substantial amount of the\
+      vertical spacing being scrolled by the other windows.
 
-<hdr>Author</hdr>
+<hdr>Original Author</hdr>
 John M. Klassa
 
 <hdr>Comments</hdr>
@@ -8377,6 +8453,7 @@ If unset, no automatic scrolling will occur.
 
 If set, scrolling either text window will result in both windows scrolling.
 If not set, the windows will scroll independent of each other.
+Note that it has <itl>no effect</itl> on the Merge Preview window contents.
 
 <bld>$pref(autoselect)</bld>
 
@@ -8468,8 +8545,8 @@ If not set, the change bars will display a "+" for lines that exist in only\
 <bld>$pref(textopt)</bld>
 
 This is a list of Tk text widget options that are applied to each of the two\
-      text windows in the main display. If you have Tk installed on your\
-      machine these will be documented in the "Text.n" man\
+      text windows in the main display, and the Merge Preview. If you have Tk\
+      installed on your machine these will be documented in the "Text.n" man\
       page.
 
 <bld>$pref(difftag)</bld>
