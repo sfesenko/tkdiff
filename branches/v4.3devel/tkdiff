@@ -4536,9 +4536,6 @@ proc vscroll-sync {id y0 y1} {
             }
         }
 
-        # Annoyingly, sometimes the *Text windows won't scroll properly,
-        # at least under windows. And I can't for the life of me figure
-        # out why. Maybe a bug in tk?
         if {$id == 1} {
             $w(RightText) yview moveto $y0
             $w(RightVSB) set $y0 $y1
@@ -4912,9 +4909,16 @@ proc merge-write-file {{andExit 0}} {
         ([expr {$g(mergefileset) ? "into" : "confirming" }] $g(mergefile))"
 
     if {!$g(mergefileset)} {
-        set path [tk_getSaveFile -initialfile [file nativename $g(mergefile)] \
-              -defaultextension "" -filetypes $opts(filetypes) \
-	      -parent [expr {[winfo ismap $w(merge)]? $w(merge) : $w(client)}]]
+        # Uncertain of wanting 'nativename' .vs. 'normalize' here...
+        #   (each supposedly yields an absolute name)
+        set path [file nativename $g(mergefile)]
+        # Regardless, next SPLIT that into dir & file, and pass as PIECES ...
+        # otherwise any/all user "directory browsing" will be IGNORED simply
+        # because the '-initialfile' was passed as an absolute path!!
+        set path [tk_getSaveFile -filetypes $opts(filetypes) \
+              -initialdir  [file dirname $path] \
+              -initialfile [file   tail  $path] -defaultextension "" \
+              -parent [expr {[winfo ismap $w(merge)]? $w(merge) : $w(client)}]]
 
         if {[string length $path] > 0} {
             set g(mergefile) $path
@@ -5179,9 +5183,12 @@ proc add-tag {wgt tag line start end} {
 
     if {"$line" eq {}} {
         # interpret OUR shorthand notation allowed for line tagging
+        #   (args passed are INTEGERS - convert to INDICE syntax)
         if {[string match \[0-9\]* "$start"]} {append start ".0"}
         if {[string match \[0-9\]* "$end"]} {append end ".0"}
-        # (+/-)any is "start (+/-)any lines"; any is "any +1 lines"
+        # 'end' may begin with JUST a plus/minus value
+        #   (+/-)xxx   becomes   "start (+/-)xxx lines"
+        #      xxx     becomes   "xxx +1 lines"
         set end [expr {[string match \[-+\]* "$end"] \
                         ? "$start${end}lines" : "$end+1lines"}]
         $wgt tag add $tag $start $end              ;# the lines themselves
@@ -6028,7 +6035,7 @@ proc remark-diffs {} {
     if {$g(startPhase) == 1}	{incr g(startPhase)}
 
     # finally, re-establish the current diff
-    set g(currdiff) [set-tag [hunk-id $g(pos)] currtag "" 0]
+    set g(currdiff) [set-tag [hunk-id $g(pos)] currtag]
 }
 
 ###############################################################################
@@ -7918,7 +7925,7 @@ In all the SCM forms, $g(name) will detect which SCM system to utilize. This\
       pairings may still be possible, if <cmp>FILESPEC</cmp> was specified as\
       a directory; where each would then use the same revision.
 
-Revision values are generally peculiar to a specifc SCM. For example, a Git <cmp>REV</cmp>\
+Revision values are generally peculiar to a specific SCM. For example, a Git <cmp>REV</cmp>\
 (see man git-rev-parse) offers several unusual variations:
      <cmp>FILE</cmp>                 [compare with <cmp>HEAD</cmp> by default]
   -r <cmp>HEAD</cmp> <cmp>FILE</cmp>        [compare with <cmp>HEAD</cmp>]
