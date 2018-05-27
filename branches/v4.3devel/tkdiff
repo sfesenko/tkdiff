@@ -599,7 +599,7 @@ proc do-show-ignoreblanks {{showIgn {}}} {
 ###############################################################################
 # Align (or force set on/off) Info window item visibility
 ###############################################################################
-proc do-show-Info {which {force {}}} {
+proc do-show-Info {{which {}}  {force {}}} {
     global opts
     global w
 
@@ -607,16 +607,27 @@ proc do-show-Info {which {force {}}} {
         set opts($which) $force
     }
 
-    # Detect if/when Info windows should be mapped OR unmapped
+    # Detect if/when text Info windows should be mapped OR unmapped
     if {$opts(showln) || $opts(showcbs)} {
         if {! [winfo ismapped $w(LeftInfo)]} {
             grid $w(LeftInfo)  -row 0 -column 1 -sticky nsew
             grid $w(RightInfo) -row 0 -column 0 -sticky nsew
         }
     } elseif {[winfo ismapped $w(LeftInfo)]} {
-            grid forget $w(LeftInfo)
-            grid forget $w(RightInfo)
+        grid forget $w(LeftInfo)
+        grid forget $w(RightInfo)
     }
+
+    # The mergeInfo window (for now) is ALWAYS 'on' ...
+    # However if we ever create an opt() for the "contrib markers"
+    # then simply uncomment this to get it turn on/off like above
+#   if {$opts(showln) || $opts(XXX-contrib-XXX)} {
+#       if {! [winfo ismapped $w(mergeInfo)]} {
+#           grid $w(mergeInfo) -row 0 -column 0 -sticky nsew		
+#       }
+#   } elseif {[winfo ismapped $w(mergeInfo)]} {
+#       grid forget $w(mergeInfo)
+#   }
 
     # In any event SOMETHING changed - ensure we utilize canvas properly
     cfg-line-info
@@ -763,17 +774,92 @@ proc cfg-line-info {} {
 
     # Then establish an X position for plotting EVERY Info element such
     # that the maximal line number (if visible) will FIT to its left
-    set g(scrInf,X) [expr {$opts(showln) ? $wDig * $g(lnumDigits) : 0}]
+    set g(scrInf,X) [expr {$opts(showln) ? $wDig*$g(lnumDigits) : 0}]
 
-    # Add to that any space needed for Changebars (if visible) which will
-    # left-justify to the X position defined above. Then INCREASE that
-    # amount (for padding) and apply it to BOTH Info canvases, calling it
-    # "scrInf,XX" (for plotting), making the canvas EXACTLY wide enough
+    # MergeInfo always (for now) adds space for ITS (left/right) markers
+    #   (but it COULD be done as a pref, by replacing 'true' with some var)
+    if {[set sz [expr {( true ? $wChg+$wSpc : 0) + $g(scrInf,X)}]]} {
+        $w(mergeInfo) configure -width [incr sz 3]
+    }
+
+    # Add to 'X' any space needed for Changebars (if visible) which will
+    # left-justify to that position defined above. Then INCREASE that amount
+    # (for padding) and apply it to BOTH Text Info canvases, calling it
+    # "scrInf,XX" (for plotting), making the canvas EXACTLY(+3pxl) wide enough
     #   (does NOTHING if meta-data visibility options are BOTH turned off)
     if {[set sz [expr {($opts(showcbs) ? $wChg+$wSpc : 0) + $g(scrInf,X)}]]} {
         $w(LeftInfo)  configure -width [incr sz 3]
         $w(RightInfo) configure -width [set g(scrInf,XX) $sz]
-        incr g(scrInf,X) ;# 'slide' the padding to 1pxl on left and 2pxl right
+    }
+    incr g(scrInf,X) ;# 'slides' the +3 padding to 1pxl on left and 2pxl right
+}
+
+###############################################################################
+# Plot text widget line numbers and/or change bars in adjoining info canvas
+###############################################################################
+proc plot-merge-info {args} {
+    global opts
+    global w
+    global g
+
+    # Ignore this routine if we havent gotten far enough into the processing
+    # -OR- its trigger will have zero effect on the displayed content
+    if {$g(startPhase) < 2  \
+    ||    ([llength $args] > 0 && [lindex $args 0 1] in $g(benign))} return
+
+    # Initialize:   Empty the canvas
+    #      Import the 'tag' attr table and make it random access
+    #      Begin with NO current attr group
+    $w(mergeInfo) delete all
+    array set attr $g(scrInf,tags)
+    set aGRP {}
+
+    # Begin at 1st VISIBLE screen text line, converting its indice->integer
+    set Lnum [expr {int([$w(mergeText) index @0,0])}]
+
+    # Map/plot Lnums
+    # Line numbers here are identical to widget indices. Markers derive
+    # from the TAGNAMES used for each line of a given diff REGION.
+    #   (PRESUMES the canvas & text widgets are physically aligned!!)
+    # Stops when we walk beyond the visible range of the Text widget lines,
+    # -OR- we discover the EXTRA "last line" at the bottom of the widget
+    set LastLnum [expr {int([$w(mergeText) index end-1lines])}]
+    while {[llength [set dline [$w(mergeText) dlineinfo $Lnum.0]]] > 0} {
+        if {$Lnum == $LastLnum} {break} ;# ignore extra last line
+
+        # Detect/decode any diff(R/L) tag on the line (if it even exists)
+        #   (the tag NAME encodes what SIDE the merge contribution came from)
+        # N.B. tags report in priority order, thus ZERO should be where to find
+        #   EITHER 'diff(R/L)' (each being of lowest prio & mutually exclusive)
+        switch [lindex [$w(mergeText) tag names $Lnum.0] 0] {
+        diffR { set side " >" ; set aNewGRP "td"}
+        diffL { set side " <" ; set aNewGRP "td"}
+        default { set side {} ; set aNewGRP "t"}
+        }
+
+        # Instantiate correct 'tag' attribute group (if it changed)
+        if {"$aNewGRP" != "$aGRP"} {
+            foreach {Fnt Asc Hgt Fg Bg} $attr([set aGRP $aNewGRP]) { }
+        }
+
+        # We want to plot on the same BASELINE as the text widget, but it
+        # must be EMULATED as canvas '-anchor' provides NO SUCH setting.
+        foreach {na y na na bl} $dline { }   ;# extract TxT y and baseline
+        incr y $bl     ;# move y to its baseline then UP by the
+        incr y -$Asc   ;# "plot font" ascent (=eff. NE/NW edge)
+
+        # Plot the contributory-side marker (if any)
+        if { "$side" != {}} {
+            $w(mergeInfo) create text $g(scrInf,X) $y -anchor nw  \
+                    -fill $Fg -font $Fnt -text "$side"
+        }
+
+        # Plot LineNum if requested
+        if {$opts(showln)} {
+            $w(mergeInfo) create text $g(scrInf,X) $y -anchor ne  \
+                    -fill $Fg -font $Fnt -text "$Lnum"
+        }
+        incr Lnum
     }
 }
 
@@ -789,12 +875,8 @@ proc plot-line-info {side args} {
     #   -OR- user has turned OFF both LINENUMBERS and CHGBARS
     if {$g(startPhase) < 2 || ((! $opts(showln)) && (! $opts(showcbs)))} return
 
-    # Created the 1st time its needed, a list of Text widget actions that, when
-    # configure'ing, will NOT alter the display height of any text line
-    #  (Also creates any session-persistent constants for NOW and FUTURE use)
-    if {! [info exists g(benign)]} {
-        set g(benign) { mark bbox cget compare count debug dlineinfo \
-                        dump get index peer search }
+    # Create session-persistent constants for NOW and FUTURE use
+    if {! [info exists g(LR,Left)]} {
         set g(LR,Left)  [list Snum Enum Pad Ofst Cbar]
         set g(LR,Right) [list Snum Enum na na na Pad Ofst Cbar]
     }
@@ -1957,13 +2039,19 @@ proc create-display {} {
     # Make sure temporary files get deleted
     #bind . <Destroy> {del-tmp}
 
-    # Arrange for line numbers to be redrawn when just about anything
+    # Create static list of Text widget actions that, when configure'ing,
+    # will NOT alter the display height of any text line (a plot speedup)
+    set g(benign) { mark bbox cget compare count debug dlineinfo \
+                    dump get index peer search }
+    # Then arrange for line numbers to be redrawn when just about anything
     # happens to EITHER text widget programatically.
     #      This runs much faster than you might think.
     trace add execution $w(LeftText)  leave [list plot-line-info Left]
     trace add execution $w(RightText) leave [list plot-line-info Right]
+    trace add execution $w(mergeText) leave [list plot-merge-info]
     bind $w(LeftText)  <Configure> [list plot-line-info Left]
     bind $w(RightText) <Configure> [list plot-line-info Right]
+    bind $w(mergeText) <Configure> [list plot-merge-info]
 
     # other misc. bindings
     common-navigation $w(LeftText) $w(RightText) $w(LeftInfo) $w(RightInfo)
@@ -2300,20 +2388,10 @@ proc build-client {} {
 
     foreach widget [list $w(LeftText) $w(RightText)] {
         eval "$widget configure $opts(textopt)"
-        foreach t {difftag currtag inlinetag deltag instag chgtag overlaptag} {
-            eval "$widget tag configure $t $opts($t)"
+        foreach t {diff curr del ins chg overlap inline} {
+            eval "$widget tag configure ${t}tag $opts(${t}tag)"
         }
-    }
-
-    # Adjust the tag priorities a bit...
-    #   IMPORTANT: this is where this pgm DEFINES the tag precedence!
-    # (and MUST SYNC with the 'translit-plot-txtags' emulation coding!!)
-    foreach window [list LeftText RightText] {
-        $w($window) tag raise deltag currtag
-        $w($window) tag raise chgtag currtag
-        $w($window) tag raise instag currtag
-        $w($window) tag raise currtag difftag
-        $w($window) tag raise inlinetag
+        $widget tag raise sel ;# Keep this on top
     }
 
     # build the map...
@@ -4218,6 +4296,7 @@ proc apply {{remark 0}} {
     # Ensure each Info widget tracks the background of their Text widget
     $w(LeftInfo)  configure -background [$w(LeftText)  cget -background]
     $w(RightInfo) configure -background [$w(RightText) cget -background]
+    $w(mergeInfo) configure -background [$w(mergeText) cget -background]
 
     set gridsize [wm grid .]
     set gridx [lindex $gridsize 2]
@@ -4264,11 +4343,16 @@ proc apply {{remark 0}} {
     grid $w(LeftLabel) -row 0 -column 0 -sticky ew
     grid $w(RightLabel) -row 0 -column 2 -sticky ew
 
-    foreach tag {difftag currtag inlinetag deltag instag chgtag overlaptag} {
+    #NOTE: This loop is basically "testing" each NEW setting for syntactic
+    #      validity as well as 'installing' them. H O W E V E R ...
+    #      it is EXPECTED to be tag-precedence-neutral as each name SHOULD
+    #      already be in existence - thus no CHANGE in precedence should occur!
+    foreach tag {difftag currtag deltag instag chgtag overlaptag inlinetag} {
         foreach win [list $w(LeftText) $w(RightText)] {
             if {[catch "$win tag configure $tag $tmpopts($tag)"]} {
                 do-error "Invalid settings for \"$pref($tag)\": \
                 \n\n'$tmpopts($tag)' is not a valid option string"
+                # if one fails, restore the prior 'good' setting
                 eval "$win tag configure $tag $opts($tag)"
                 return
             }
@@ -4278,6 +4362,7 @@ proc apply {{remark 0}} {
     if {[catch "$w(BottomText) tag configure diff $tmpopts(bytetag)"]} {
         do-error "Invalid settings for \"$pref(bytetag)\": \
         \n\n'$tmpopts(bytetag)' is not a valid option string"
+        # Again, if it fails, restore the prior 'good' setting
         eval "$w(BottomText) tag configure diff $opts(bytetag)"
         return
     }
@@ -4380,8 +4465,7 @@ proc apply {{remark 0}} {
 
     # alter, show (or hide) various data (Lnums, Cbars, etc.), and we are done
     reconfigure-toolbar
-    do-show-Info showln
-    do-show-Info showcbs
+    do-show-Info
     do-show-map
     do-show-lineview
     update idletasks  ;# update all this BEFORE propagate is shut off !!
@@ -4832,6 +4916,7 @@ proc build-merge-preview {} {
     pack $top.frame -side top -fill both -expand y -padx 10 -pady 10
 
     # Certain widgets need external handles, remainder are local
+    set w(mergeInfo) $top.frame.cvs
     set w(mergeText) $top.frame.text
     set w(mergeVSB) $top.frame.vsb
     set w(mergeHSB) $top.frame.hsb
@@ -4846,15 +4931,19 @@ proc build-merge-preview {} {
     text $w(mergeText) -bd 0 -takefocus 1 -yscrollcommand [list $w(mergeVSB) \
       set] -xscrollcommand [list $w(mergeHSB) set]
 
-    grid $w(mergeText) -row 0 -column 0 -sticky nsew
-    grid $w(mergeVSB) -row 0 -column 1 -sticky ns
-    grid $w(mergeHSB) -row 1 -column 0 -sticky ew
+    canvas $w(mergeInfo) -highlightthickness 0
+
+    grid $w(mergeInfo) -row 0 -column 0 -sticky nsew
+    grid $w(mergeText) -row 0 -column 1 -sticky nsew
+    grid $w(mergeVSB) -row 0 -column 2 -sticky ns
+    grid $w(mergeHSB) -row 1 -column 0 -columnspan 2 -sticky ew
 
     grid rowconfigure $top.frame 0 -weight 1
     grid rowconfigure $top.frame 1 -weight 0
 
-    grid columnconfigure $top.frame 0 -weight 1
-    grid columnconfigure $top.frame 1 -weight 0
+    grid columnconfigure $top.frame 0 -weight 0
+    grid columnconfigure $top.frame 1 -weight 1
+    grid columnconfigure $top.frame 2 -weight 0
 
     # buttons
     button $top.mRecenter -width 8 -text "ReCenter" -underline 0 \
@@ -4881,10 +4970,16 @@ proc build-merge-preview {} {
     pack $w(mergeWriteAndExit) -side right -pady 5 -padx 1
     pack $top.mExit -side right -pady 5 -padx 1
 
+    # Insert tag defs (in precedence order)
+    # N.B> This matters to 'plot-merge-info':
+    #    we NEED 'diffR' or 'diffL' as lowest precedence
+    #    (whichever applies to the diff line in question).
+    #    Its an encoding trick noting which SIDE contrib'ed a diff line.
     eval $w(mergeText) configure $opts(textopt)
-    foreach tag {difftag currtag} {
-        eval $w(mergeText) tag configure $tag $opts($tag)
-    }
+    eval $w(mergeText) tag configure {diffL} $opts(difftag)
+    eval $w(mergeText) tag configure {diffR} $opts(difftag)
+    eval $w(mergeText) tag configure {currtag} $opts(currtag)
+    $w(mergeText) tag raise sel ;# Keep this on top
 
     # adjust the tabstops
     set cwidth [font measure [$w(mergeText) cget -font] "m"]
@@ -4892,10 +4987,6 @@ proc build-merge-preview {} {
     $w(mergeText) configure -tabs $tabstops
 
     wm protocol $w(merge) WM_DELETE_WINDOW {do-show-merge 0}
-
-    # adjust the tag priorities a bit...
-    $w(mergeText) tag raise sel
-    $w(mergeText) tag raise currtag difftag
 
     common-navigation $w(mergeText)
 }
@@ -4935,7 +5026,7 @@ proc merge-write-file {{andExit 0}} {
 }
 
 ###############################################################################
-# Add a mark where each diff begins and tag diff regions so they are visible.
+# Add a mark where each diff begins and tag each region so they are visible.
 # Default case ONLY WORKS when pre-loaded text is the original (Left) version.
 # Optional arg allows adding/removing (ie. editting) hunk identifiers later on
 ###############################################################################
@@ -4992,7 +5083,7 @@ proc merge-add-marks {{hIDS {}}} {
         }
     }
 
-    # ... finally, TAG the regions AND select the merge CHOICES for each
+    # ... finally, select per merge CHOICES and TAG the regions for each
     set currdiff [hunk-id $g(pos)]
     foreach hID $hIDS {
 
@@ -5001,7 +5092,7 @@ proc merge-add-marks {{hIDS {}}} {
         if {$g(merge$hID) == 1} {
             # (But dont do a Left 'a'-type hunk - it's not visible)
             if {![string match "*a*" "$hID"]} {
-                add-tag $w(mergeText) difftag {} mark$hID "+[diff-size $hID 1]"
+                add-tag $w(mergeText) diffL {} mark$hID "+[diff-size $hID 1]"
             }
         } else { merge-select-version $hID 1 $g(merge$hID) }
 
@@ -5033,29 +5124,35 @@ proc merge-select-version {hID oldversion newversion} {
     # Start of hunk in screen coordinates
     set S [lindex $g(scrInf,$hID) 0]
 
-    # Get the text directly from window
+    # Get the text to insert directly from window
     switch -- $newversion {
     1 {
             set newlines [diff-size $hID 1]
             set newtext [$w(LeftText) get $S.0 $S.0+${newlines}lines]
+            set tagwith "diffL"
         }
     2 {
             set newlines [diff-size $hID 2]
             set newtext [$w(RightText) get $S.0 $S.0+${newlines}lines]
+            set tagwith "diffR"
         }
     12 {
-            set newlines [diff-size $hID 1]
+            set firstlines [set newlines [diff-size $hID 1]]
             set newtext [$w(LeftText) get $S.0 $S.0+${newlines}lines]
             set newlines [diff-size $hID 2]
             append newtext [$w(RightText) get $S.0 $S.0+${newlines}lines]
-            incr newlines [diff-size $hID 1]
+            incr newlines $firstlines
+	    set tagwith "diffL"
+	    set othertg "diffR"
         }
     21 {
-            set newlines [diff-size $hID 2]
+            set firstlines [set newlines [diff-size $hID 2]]
             set newtext [$w(RightText) get $S.0 $S.0+${newlines}lines]
             set newlines [diff-size $hID 1]
             append newtext [$w(LeftText) get $S.0 $S.0+${newlines}lines]
-            incr newlines [diff-size $hID 2]
+            incr newlines $firstlines
+	    set tagwith "diffR"
+	    set othertg "diffL"
         }
     }
 
@@ -5080,9 +5177,28 @@ proc merge-select-version {hID oldversion newversion} {
         }
     }
 
-    # NOW we can insert AND tag it
+    # NOW we can insert AND tag it (this USED to be easier ... we used
+    #   to rely on the insertion to DO the tagging; including NONE
+    #   Can't DO that now that difftag is really a diffL or diffR or BOTH) !!
     $w(mergeText) configure -state normal
-    $w(mergeText) insert mark$hID $newtext difftag
+    $w(mergeText) insert mark$hID $newtext
+    if {[info exists firstlines]} {
+        if {$firstlines} {
+            add-tag $w(mergeText) $tagwith {} mark$hID "+$firstlines"
+
+            # Append the 2nd piece (if needed)
+            if {$firstlines != $newlines} {
+                add-tag $w(mergeText) $othertg {} mark$hID+${firstlines}lines \
+                                            "+[expr {$newlines - $firstlines}]"
+            }
+        } else {
+            add-tag $w(mergeText) $othertg {} mark$hID "+$newlines"
+        }
+
+    # avoid tagging ZERO lines
+    } elseif {$newlines}  { 
+        add-tag $w(mergeText) $tagwith {} mark$hID "+$newlines"
+    }
     $w(mergeText) configure -state disabled
     if {"$hID" == "[hunk-id $g(pos)]"} {
         add-tag $w(mergeText) currtag {} mark$hID "+$newlines"
@@ -5220,6 +5336,8 @@ proc set-tag {hID newtag {oldtag ""} {setpos 0}} {
         $w(LeftText)  tag remove $oldtag $S.0 $E.0+1lines
         $w(RightText) tag remove $oldtag $S.0 $E.0+1lines
 
+	# N.B> $oldtag is really only ever used for "currtag"
+	# so "difftag" is never seen here (thus no diff(R/L) mapping reqd)
         catch {
             set lines [diff-size $hID $g(merge$hID)]
             $w(mergeText) tag remove $oldtag mark$hID "mark$hID+${lines}lines"
@@ -5241,9 +5359,34 @@ proc set-tag {hID newtag {oldtag ""} {setpos 0}} {
         add-tag $w(RightText) $coltag {} $S $E
     }
 
-    catch {
-        set lines [diff-size $hID $g(merge$hID)]
-        add-tag $w(mergeText) $newtag {} mark$hID "+$lines"
+    if {[set full [diff-size $hID $g(merge$hID)]]} {
+        # Merge must map 'difftag' into SIDE-SPECIFIC equivalent tags
+        if {"$newtag" == "difftag"} {
+            # We'll use meta-programming to unwind and map the encoding
+            # so create the transforms we need to access the pieces
+            set sideTag([set side2(21) [set side1(12) 1]]) "diffL"
+            set sideTag([set side2(12) [set side1(21) 2]]) "diffR"
+
+            if {$g(merge$hID) < 10} {
+		# Its a single side and occupies the 'full' length ...
+                lappend tags $sideTag($g(merge$hID)) mark$hID $full
+            } else {
+                # ... or its  2 sides that SUMS to the full length (beware of 0)
+                if {[set first [diff-size $hID $side1($g(merge$hID))]} {
+		    lappend tags $sideTag($side1($g(merge$hID))) mark$hID $first
+                } else {
+                    lappend tags $sideTag($side2($g(merge$hID))) mark$hID $first
+		}
+		# Append the 2nd piece (if needed)
+		if {$first && $first != $full} {
+                    lappend tags $sideTag($side2($g(merge$hID))) \
+		                  mark$hID+${first}lines [expr {$full - $first}]
+                }
+            }
+        } else {lappend tags $newtag mark$hID $full}
+        foreach {tag where lines} "$tags" {
+            add-tag $w(mergeText) $tag {} $where "+$lines"
+        }
     }
 
     # Move the view on both text widgets so that the new region is
@@ -5261,12 +5404,6 @@ proc set-tag {hID newtag {oldtag ""} {setpos 0}} {
                 $w(mergeText) see mark$hID
             }
         }
-    }
-
-    # make sure the sel tag has the highest priority
-    foreach window [list LeftText RightText] {
-        $w($window) tag raise sel
-        $w($window) tag raise inlinetag
     }
 
     return $hID
@@ -5996,15 +6133,29 @@ proc remark-diffs {} {
         eval $win tag delete [$win tag names]
 
         # (tag names here abbreviated simply to fit in 80 columns)
-        foreach tag {diff curr inline del ins chg overlap} {
-            # Only 'curr' and 'diff' should be config'd into mergeText
+	# IMPORTANT - this DEFINES tag PRECEDENCE throughout TkDiff
+        #   (and MUST SYNC with the 'translit-plot-txtags' emulation coding!!)
+        foreach tag {diff curr del ins chg overlap inline sel} {
+	    # Yet 'difftag' cfgs into mergeText as TWO names: diffR & diffL,
+	    # but as ITSELF in the main Text windows (despite the same attrs)
+	    #  - a coding trick so merge knows which SIDE provided the line!
+	    #
             # Catch provides an error check against bad userpref settings
-            if {($win != $w(mergeText) || ($tag == "diff" || $tag == "curr")) \
-            &&  [catch "$win tag configure ${tag}tag $opts(${tag}tag)"]} {
+            if { "$tag" == "sel"} {
+                $win tag raise $tag
+
+            } elseif {($win != $w(mergeText) || $tag == "curr") \
+             && [catch "$win tag configure ${tag}tag $opts(${tag}tag)"]} {
                 do-error "Invalid settings for \"$pref(${tag}tag)\": \
                 \n\n'$opts(${tag}tag)' is not a valid option string."
+                # Re-run OUTSIDE the catch to let it blow up for real
                 eval "$win tag configure ${tag}tag $opts(${tag}tag)"
                 return
+
+            } elseif {$win == $w(mergeText) && "$tag" == "diff"} {
+		# (difftag has already been validity checked by now)
+                eval $win tag configure ${tag}R $opts(${tag}tag)
+                eval $win tag configure ${tag}L $opts(${tag}tag)
             }
         }
     }
@@ -8322,11 +8473,16 @@ Oftentimes, you may find that the "Diff" program has packed several lines\
 
 To see a preview of the file that would be written by\
       <btn>Write Merge File</btn>, select <btn>Show Merge Window</btn> in the\
-      <btn>View</btn> menu. A separate window will be shown containing the\
-      preview. It is updated as you select merge choices.  It is also\
+      <btn>Merge</btn> menu. A separate window will be shown containing the\
+      preview. It is updated as you select merge choices, and provides markers\
+      that remind you as to which side (Left/Right) is contributing its diff\
+      region into the result. Note that when selecting a choice such as the\
+      Left-side of an "add"-type CDR, there is <itl>nothing</itl> to actually\
+      display. Additionally, the Preview window is responsive to the current\
+      <btn>$pref(showln)</btn> setting. It is also\
       synchronized with the other text widgets when\
       <btn>Synchronize Scrollbars</btn> is on, at least as far as actions that\
-      <itl>change</itl> the CDR, but it will <bld>not</bld> actually\
+      <itl>change</itl> the CDR, however it <bld>can not</bld> actually\
       <itl>scroll</itl> in unison with the other windows, primarily because\
       as a representation of the eventual Merge file, it does NOT HAVE any\
       <itl>padding</itl> lines which accounts for a substantial amount of the\
