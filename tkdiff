@@ -5115,10 +5115,11 @@ proc merge-select-version {hID oldversion newversion} {
     global w
 
     catch {
-        set oldlines [diff-size $hID $oldversion]
-        $w(mergeText) configure -state normal
-        $w(mergeText) delete mark$hID "mark${hID}+${oldlines}lines"
-        $w(mergeText) configure -state disabled
+        if {[set tot [diff-size $hID $oldversion]]} {
+            $w(mergeText) configure -state normal
+            $w(mergeText) delete mark$hID "mark${hID}+${tot}lines"
+            $w(mergeText) configure -state disabled
+        }
     }
 
     # Start of hunk in screen coordinates
@@ -5126,33 +5127,33 @@ proc merge-select-version {hID oldversion newversion} {
 
     # Get the text to insert directly from window
     switch -- $newversion {
-    1 {
-            set newlines [diff-size $hID 1]
-            set newtext [$w(LeftText) get $S.0 $S.0+${newlines}lines]
-            set tagwith "diffL"
+        1 {
+            if {[set tot [set i [diff-size $hID 1]]]} {
+                lappend txt [$w(LeftText)  get $S.0 $S.0+${i}lines] diffL
+            } else {return}
         }
-    2 {
-            set newlines [diff-size $hID 2]
-            set newtext [$w(RightText) get $S.0 $S.0+${newlines}lines]
-            set tagwith "diffR"
+        2 {
+            if {[set tot [set i [diff-size $hID 2]]]} {
+                lappend txt [$w(RightText) get $S.0 $S.0+${i}lines] diffR
+            } else {return}
         }
-    12 {
-            set firstlines [set newlines [diff-size $hID 1]]
-            set newtext [$w(LeftText) get $S.0 $S.0+${newlines}lines]
-            set newlines [diff-size $hID 2]
-            append newtext [$w(RightText) get $S.0 $S.0+${newlines}lines]
-            incr newlines $firstlines
-	    set tagwith "diffL"
-	    set othertg "diffR"
+        12 {
+            if {[set tot [set i [diff-size $hID 1]]]} {
+                lappend txt [$w(LeftText)  get $S.0 $S.0+${i}lines] diffL
+            }
+            if {[set tot [diff-size $hID 2]]} {
+                lappend txt [$w(RightText) get $S.0 $S.0+${i}lines] diffR
+                incr tot $i
+            }
         }
-    21 {
-            set firstlines [set newlines [diff-size $hID 2]]
-            set newtext [$w(RightText) get $S.0 $S.0+${newlines}lines]
-            set newlines [diff-size $hID 1]
-            append newtext [$w(LeftText) get $S.0 $S.0+${newlines}lines]
-            incr newlines $firstlines
-	    set tagwith "diffR"
-	    set othertg "diffL"
+        21 {
+            if {[set tot [set i [diff-size $hID 2]]]} {
+                lappend txt [$w(RightText) get $S.0 $S.0+${i}lines] diffR
+            }
+            if {[set i [diff-size $hID 1]]} {
+                lappend txt [$w(LeftText)  get $S.0 $S.0+${i}lines] diffL
+                incr tot $i
+            }
         }
     }
 
@@ -5177,31 +5178,12 @@ proc merge-select-version {hID oldversion newversion} {
         }
     }
 
-    # NOW we can insert AND tag it (this USED to be easier ... we used
-    #   to rely on the insertion to DO the tagging; including NONE
-    #   Can't DO that now that difftag is really a diffL or diffR or BOTH) !!
+    # NOW insert AND tag it (txt holds PAIRS of textlines AND assoc tag)
     $w(mergeText) configure -state normal
-    $w(mergeText) insert mark$hID $newtext
-    if {[info exists firstlines]} {
-        if {$firstlines} {
-            add-tag $w(mergeText) $tagwith {} mark$hID "+$firstlines"
-
-            # Append the 2nd piece (if needed)
-            if {$firstlines != $newlines} {
-                add-tag $w(mergeText) $othertg {} mark$hID+${firstlines}lines \
-                                            "+[expr {$newlines - $firstlines}]"
-            }
-        } else {
-            add-tag $w(mergeText) $othertg {} mark$hID "+$newlines"
-        }
-
-    # avoid tagging ZERO lines
-    } elseif {$newlines}  { 
-        add-tag $w(mergeText) $tagwith {} mark$hID "+$newlines"
-    }
+    $w(mergeText) insert mark$hID {*}$txt
     $w(mergeText) configure -state disabled
     if {"$hID" == "[hunk-id $g(pos)]"} {
-        add-tag $w(mergeText) currtag {} mark$hID "+$newlines"
+        add-tag $w(mergeText) currtag {} mark$hID "+$tot"
     }
 
     # ... Nevertheless, we always LEAVE all gravities as 'Left' AFTER the
@@ -5336,8 +5318,8 @@ proc set-tag {hID newtag {oldtag ""} {setpos 0}} {
         $w(LeftText)  tag remove $oldtag $S.0 $E.0+1lines
         $w(RightText) tag remove $oldtag $S.0 $E.0+1lines
 
-	# N.B> $oldtag is really only ever used for "currtag"
-	# so "difftag" is never seen here (thus no diff(R/L) mapping reqd)
+        # N.B> $oldtag is really only ever used for "currtag"
+        # so "difftag" is never seen here (thus no diff(R/L) mapping reqd)
         catch {
             set lines [diff-size $hID $g(merge$hID)]
             $w(mergeText) tag remove $oldtag mark$hID "mark$hID+${lines}lines"
@@ -5368,19 +5350,19 @@ proc set-tag {hID newtag {oldtag ""} {setpos 0}} {
             set sideTag([set side2(12) [set side1(21) 2]]) "diffR"
 
             if {$g(merge$hID) < 10} {
-		# Its a single side and occupies the 'full' length ...
+                # Its a single side and occupies the 'full' length ...
                 lappend tags $sideTag($g(merge$hID)) mark$hID $full
             } else {
                 # ... or its  2 sides that SUMS to the full length (beware of 0)
                 if {[set first [diff-size $hID $side1($g(merge$hID))]} {
-		    lappend tags $sideTag($side1($g(merge$hID))) mark$hID $first
+                    lappend tags $sideTag($side1($g(merge$hID))) mark$hID $first
                 } else {
                     lappend tags $sideTag($side2($g(merge$hID))) mark$hID $first
-		}
-		# Append the 2nd piece (if needed)
-		if {$first && $first != $full} {
+                }
+                # Append the 2nd piece (if needed)
+                if {$first && $first != $full} {
                     lappend tags $sideTag($side2($g(merge$hID))) \
-		                  mark$hID+${first}lines [expr {$full - $first}]
+                                  mark$hID+${first}lines [expr {$full - $first}]
                 }
             }
         } else {lappend tags $newtag mark$hID $full}
@@ -6133,13 +6115,13 @@ proc remark-diffs {} {
         eval $win tag delete [$win tag names]
 
         # (tag names here abbreviated simply to fit in 80 columns)
-	# IMPORTANT - this DEFINES tag PRECEDENCE throughout TkDiff
+        # IMPORTANT - this DEFINES tag PRECEDENCE throughout TkDiff
         #   (and MUST SYNC with the 'translit-plot-txtags' emulation coding!!)
         foreach tag {diff curr del ins chg overlap inline sel} {
-	    # Yet 'difftag' cfgs into mergeText as TWO names: diffR & diffL,
-	    # but as ITSELF in the main Text windows (despite the same attrs)
-	    #  - a coding trick so merge knows which SIDE provided the line!
-	    #
+            # Yet 'difftag' cfgs into mergeText as TWO names: diffR & diffL,
+            # but as ITSELF in the main Text windows (despite the same attrs)
+            #  - a coding trick so merge knows which SIDE provided the line!
+            #
             # Catch provides an error check against bad userpref settings
             if { "$tag" == "sel"} {
                 $win tag raise $tag
@@ -6153,7 +6135,7 @@ proc remark-diffs {} {
                 return
 
             } elseif {$win == $w(mergeText) && "$tag" == "diff"} {
-		# (difftag has already been validity checked by now)
+                # (difftag has already been validity checked by now)
                 eval $win tag configure ${tag}R $opts(${tag}tag)
                 eval $win tag configure ${tag}L $opts(${tag}tag)
             }
@@ -7063,6 +7045,7 @@ proc splcmb-Dialog {Combine} {
             foreach DU {d u} {  ;# Down Up	 BUTN >  to "splcmb-adj"
               set nm "."
               button ${BtnFr}[append nm $LR $UL $DU] -image arroW$DU \
+                  -repeatdelay 750  -repeatinterval 400 \
                   -command [list splcmb-adj $LR $UL $DU]
           ### Huh? this was INTENDED to make btn image disappear when disabled
           #   Instead it just stipples the original buttonface image. Why??
@@ -8439,7 +8422,9 @@ Oftentimes, you may find that the "Diff" program has packed several lines\
       edges, with feedback provided in the Text windows. You need only to\
       click on arrows to adjust either or both edges in the Left or Right\
       text window displays until satisfied that the <itl>NEW</itl> CDR\
-      describes the change content you wish to convey.
+      describes the change content you wish to convey. Be aware these arrow\
+      buttons will <itl>automatically</itl> advance if you press and hold\
+      instead of of clicking, making it easier to adjust a large expanse.
       Once accepted, $g(name) will treat the new difference record exactly\
       the same as any other, despite the fact that it appears run together\
       with other adjoining records, having NO common line to separate them.\
