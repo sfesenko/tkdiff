@@ -188,6 +188,7 @@ array set g {
     lnumDigits      4
     mapborder       0
     mapheight       0
+    mapScrolling    0
     mergefile       ""
     returnValue     0
     showmerge       0
@@ -1486,7 +1487,7 @@ proc commandline {} {
                 incr argindex
             }
         "^-" {
-                append opts(diffcmd) " $arg "
+                append opts(diffcmd) " [concat $arg] "
             }
         default {
                 incr pths
@@ -2426,6 +2427,8 @@ proc build-client {} {
     bind $w(mapCanvas) <ButtonPress-1> [list handleMapEvent B1-Press %y]
     bind $w(mapCanvas) <Button1-Motion> [list handleMapEvent B1-Motion %y]
     bind $w(mapCanvas) <ButtonRelease-1> [list handleMapEvent B1-Release %y]
+    bind $w(mapCanvas) <ButtonPress-2> [list handleMapEvent B2-Press %y]
+    bind $w(mapCanvas) <ButtonRelease-2> [list handleMapEvent B2-Release %y]
 
     # Again, wheel scrolling over the MAP window SHOULD also work
     # - but can only target the THEN g(activeWindow) text widget
@@ -3536,7 +3539,10 @@ proc build-status {} {
 }
 
 ###############################################################################
-# handles events over the map
+# handles simulated-scroll events over the map
+#  Provides 3 modes:
+# B1-click (over trough) pages, B1-motion (over thumb) drags, or B2-click jumps
+# Once a button is down, the mode locks and mouse X-location becomes irrelevant
 ###############################################################################
 proc handleMapEvent {event y} {
     global opts
@@ -3546,48 +3552,59 @@ proc handleMapEvent {event y} {
 
     switch -- $event {
     B1-Press {
-            set ty1 [lindex $g(thumbBbox) 1]
-            set ty2 [lindex $g(thumbBbox) 3]
-            if {$y >= $ty1 && $y <= $ty2} {
-                set g(mapScrolling) 1
-
-                # this captures the negative delta between the mouse press \
-                  and the top
-                # of the thumbbox. It's used so when we scroll by moving the
-                # mouse, we can keep this distance constant. This is how all
-                # scrollbars work, and it's what the user expects.
-                set g(thumbDeltaY) [expr -1 * ($y - $ty1 - 2)]
-
+            if {! $g(mapScrolling)} {
+                set ty1 [lindex $g(thumbBbox) 1]
+                set ty2 [lindex $g(thumbBbox) 3]
+                if {$y >= $ty1 && $y <= $ty2} {
+                    # this captures the negative delta between the mouse press
+                    # and the top of the thumbbox. It's used so when we scroll
+                    # by moving the mouse, we can keep this distance constant.
+                    #  (this is how all scrollbars work, and what is expected)
+                    set g(thumbDeltaY) [expr -1 * ($y - $ty1 - 2)]
+                         set g(mapScrolling) 3
+                } else { set g(mapScrolling) 1 }
+                # Either way, mode is set and other mouse events are locked out
             }
         }
+    B2-Press {
+            # Set mode and lock out other mouse events
+            if {! $g(mapScrolling)} { set g(mapScrolling) 2 }
+    }
+    B2-Release -
     B1-Motion {
-            if {[info exists g(mapScrolling)]} {
-                incr y $g(thumbDeltaY)
+            if {$g(mapScrolling) & 2} {
+                if {$g(mapScrolling) == 3} {
+                    incr y $g(thumbDeltaY)
+                }
 
                 map-seek $y
+
+                # Release our mouse event lock (B2-click completed)
+                if {$g(mapScrolling) == 2} { set g(mapScrolling) 0 }
             }
         }
     B1-Release {
             show-status ""
-            set ty1 [lindex $g(thumbBbox) 1]
-            set ty2 [lindex $g(thumbBbox) 3]
-            # if we release over the trough (*not* over the thumb)
-            # just scroll by the size of the thumb
-            if {$y < $ty1 || $y > $ty2} {
-                if {$y < $ty1} {
-                    # if vertical scrollbar syncing is turned on,
-                    # all the other windows should toe the line
-                    # appropriately...
-                    $w(RightText) yview scroll -1 pages
-                } else {
-                    $w(RightText) yview scroll 1 pages
+            if {$g(mapScrolling) & 1} {
+                set ty1 [lindex $g(thumbBbox) 1]
+                set ty2 [lindex $g(thumbBbox) 3]
+                # if we release over the trough (*not* over the thumb)
+                #   just scroll by the size of the thumb; ...
+                # otherwise we must have been dragging the thumb and we're done
+                if {$y < $ty1 || $y > $ty2} {
+                    if {$y < $ty1} {
+                        # if vertical scrollbar syncing is turned on,
+                        # all the other windows should toe the line
+                        # appropriately...
+                        $g(activeWindow) yview scroll -1 pages
+                    } else {
+                        $g(activeWindow) yview scroll 1 pages
+                    }
                 }
 
-            } else {
-                # do nothing
+                # Release our mouse event lock (B1 click/drag completed)
+                set g(mapScrolling) 0
             }
-
-            catch {unset g(mapScrolling)}
         }
     }
 }
@@ -5432,7 +5449,7 @@ proc map-seek {y} {
     set yview [expr {(double($y) / double($g(mapheight)))}]
 
     # Show text corresponding to map;
-    $w(RightText) yview moveto $yview
+    $g(activeWindow) yview moveto $yview
 }
 
 ###############################################################################
@@ -7774,7 +7791,8 @@ proc write-report {command args} {
         }
     browse {
             set path [tk_getSaveFile -parent $w(reportPopup) \
-              -initialfile $report(filename)]
+              -initialdir [file dirname $report(filename)] \
+              -initialfile [file tail $report(filename)]]
 
             if {[string length $path] > 0} {
                 set report(filename) $path
@@ -8138,9 +8156,39 @@ Finally, note that anything with a leading dash that is <itl>not</itl>\
       recognized as a $g(name) option is passed through to diff.  This\
       permits you to temporarily alter the way diff is called, without\
       resorting to a change in your preferences file. However it also means\
-      that to use the "-d" option for GNU diff, you must specify it using\
-      its equivalent long form of "--minimal". Thankfully, the "-r" diff\
-      option (recursive descent) is inappropriate for $g(name) use.
+      that to use, for example, the "-d" option for GNU diff (which\
+      <itl>is</itl> a $g(name) option), you must specify it using its\
+      equivalent long form of "--minimal" (to avoid the collision).
+      As a related issue, trying to pass <itl>any</itl> option that requires\
+      a <bld>value</bld> <itl>MAY</itl> necessitate an uncommon form of\
+      quoting to preserve syntactically required "spaces".\
+      If the value portion has NO blanks and can be physically attached to its\
+      option flag, no special action is required. But if the value requires a\
+      "space" -or- must be separated from its option flag by one, then you\
+      should pass the entire construct as quoted. As an example, GNU diff has\
+      an option whose syntax is:
+      <bld>-I, --ignore-matching-lines=RE</bld>
+(<itl>A great example, but a VERY bad idea, because it effectively LIES to\
+      $g(name) about the relative COUNTS of the involved lines, causing a\
+      Left/Right misalignment of highlighting)</itl>. Yet, as an explanation\
+      of passing options that legitimately requires "spaces", its great.
+      Thus if you <itl>WERE</itl> to tell diff to not consider any line that\
+      starts with a octathorp (#) you might pass this to $g(name) as\
+      <itl>either</itl> :
+      --ignore-matching-lines=^#    (or even -I^#)
+or
+      <bld>"</bld>-I   ^#<bld>"</bld>
+Note in the second case, quoting of BOTH the flag and its value\
+      <itl>together</itl>. Without the quoting, $g(name) would only pass\
+      the <itl>flag</itl> and would treat the value portion as being a\
+      filename to be compared, leading most likely to complaints of failed\
+      diff execution due to misunderstood command syntax. The reason is simply\
+      that $g(name) <itl>has no knowledge</itl> of the flags being passed,\
+      nor if they might legitimately need a value, and thus requires it to\
+      be specified as a <itl>single</itl> construct, with embedded blanks.
+      REMEMBER - do not actually USE this particular GNU diff option...it was\
+      designed to make the <bld>direct</bld> output of diff <itl>itself</itl>\
+      more meaningful by simply suppressing what are in fact, differences.
     }
 
     if {$mode == "cline"} {
@@ -8525,7 +8573,7 @@ If the \"<itl>$pref(ignoreblanksopt)</itl>\" (described below) is specified\
 <bld>$pref(ignoreblanksopt)</bld>
 
 Arguments to send with the diff command to tell it how to ignore whitespace.\
-      If you are using gnu diff, "-b" or "--ignore-space-change" ignores\
+      If you are using GNU diff, "-b" or "--ignore-space-change" ignores\
       changes in the amount of whitespace, while "-w" or\
       "--ignore-all-space" ignores all white space.
 If this field is shown <itl>disabled</itl>, it can be accessed by toggling\
@@ -9018,7 +9066,8 @@ proc simpleEd {command args} {
     saveAs {
             set filename [lindex $args 0]
             set w [lindex $args 1]
-            set filename [tk_getSaveFile -initialfile $filename]
+            set filename [tk_getSaveFile -initialfile [file tail $filename] \
+                                         -initialdir [file dirname $filename]]
             if {$filename != ""} {
                 simpleEd save $filename $w
             }
