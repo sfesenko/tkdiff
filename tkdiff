@@ -4985,8 +4985,8 @@ proc build-merge-preview {} {
 
     pack $win.bottom.mDismiss -side right -pady 5 -padx 10
     pack $win.bottom.mRecenter -side right -pady 5 -padx 1
-    pack $w(mergeWrite) -side right -pady 5 -padx 1
-    pack $w(mergeWriteAndExit) -side right -pady 5 -padx 1
+    pack $w(mergeWrite) -side right -pady 5 -padx 1 -ipadx 1
+    pack $w(mergeWriteAndExit) -side right -pady 5 -padx 1 -ipadx 1
     pack $win.bottom.mExit -side right -pady 5 -padx 1
 
     # Insert tag defs (in precedence order)
