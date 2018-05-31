@@ -4915,7 +4915,7 @@ proc build-merge-preview {} {
     global w
     global g
 
-    set top [toplevel $w(merge)]
+    set win [toplevel $w(merge)]
     set rx [winfo rootx .]
     set ry [winfo rooty .]
     set px [winfo width .]
@@ -4923,22 +4923,22 @@ proc build-merge-preview {} {
     #debug-info "  rx $rx  ry $ry  px $px  py $py"
     set x [expr {$rx + $px / 4}]
     set y [expr {$ry + $py / 2}]
-    wm geometry $top "+${x}+$y"
+    wm geometry $win "+${x}+$y"
 
-    wm group $top .
-    wm title $top "$g(name) Merge Preview"
+    wm group $win .
+    wm title $win "$g(name) Merge Preview"
     wm withdraw $w(merge)
 
-    frame $top.frame -bd 1 -relief sunken
-    pack $top.frame -side top -fill both -expand y -padx 10 -pady 10
+    frame $win.bottom
+    frame $win.top -bd 1 -relief sunken
 
     # Certain widgets need external handles, remainder are local
-    set w(mergeInfo) $top.frame.cvs
-    set w(mergeText) $top.frame.text
-    set w(mergeVSB) $top.frame.vsb
-    set w(mergeHSB) $top.frame.hsb
-    set w(mergeWrite) $top.mergeWrite
-    set w(mergeWriteAndExit) $top.mergeWriteAndExit
+    set w(mergeInfo) $win.top.cvs
+    set w(mergeText) $win.top.text
+    set w(mergeVSB) $win.top.vsb
+    set w(mergeHSB) $win.top.hsb
+    set w(mergeWrite) $win.bottom.mergeWrite
+    set w(mergeWriteAndExit) $win.bottom.mergeWriteAndExit
 
     # Window and scrollbars
     scrollbar $w(mergeHSB) -orient horizontal -command [list $w(mergeText) \
@@ -4950,26 +4950,28 @@ proc build-merge-preview {} {
 
     canvas $w(mergeInfo) -highlightthickness 0
 
+    pack $win.bottom -side bottom -fill x
+    pack $win.top -side top -fill both -expand yes -ipadx 5 -ipady 10
     grid $w(mergeInfo) -row 0 -column 0 -sticky nsew
     grid $w(mergeText) -row 0 -column 1 -sticky nsew
     grid $w(mergeVSB) -row 0 -column 2 -sticky ns
     grid $w(mergeHSB) -row 1 -column 0 -columnspan 2 -sticky ew
 
-    grid rowconfigure $top.frame 0 -weight 1
-    grid rowconfigure $top.frame 1 -weight 0
+    grid rowconfigure $win.top 0 -weight 1
+    grid rowconfigure $win.top 1 -weight 0
 
-    grid columnconfigure $top.frame 0 -weight 0
-    grid columnconfigure $top.frame 1 -weight 1
-    grid columnconfigure $top.frame 2 -weight 0
+    grid columnconfigure $win.top 0 -weight 0
+    grid columnconfigure $win.top 1 -weight 1
+    grid columnconfigure $win.top 2 -weight 0
 
     # buttons
-    button $top.mRecenter -width 8 -text "ReCenter" -underline 0 \
+    button $win.bottom.mRecenter -width 8 -text "ReCenter" -underline 0 \
         -command merge-center
 
-    button $top.mDismiss -width 8 -text "Dismiss" -underline 0 \
+    button $win.bottom.mDismiss -width 8 -text "Dismiss" -underline 0 \
         -command "do-show-merge 0"
 
-    button $top.mExit -width 8 -text "Exit $g(name)" -underline 0 \
+    button $win.bottom.mExit -width 8 -text "Exit $g(name)" -underline 0 \
         -command {exit}
 
     # These last two buttons NAMES are later re-cfg'd with "..." appended
@@ -4981,11 +4983,11 @@ proc build-merge-preview {} {
     button $w(mergeWriteAndExit) -width 8 -text "Save & Exit" \
         -underline 8 -command {merge-write-file 1 }
 
-    pack $top.mDismiss -side right -pady 5 -padx 10
-    pack $top.mRecenter -side right -pady 5 -padx 1
+    pack $win.bottom.mDismiss -side right -pady 5 -padx 10
+    pack $win.bottom.mRecenter -side right -pady 5 -padx 1
     pack $w(mergeWrite) -side right -pady 5 -padx 1
     pack $w(mergeWriteAndExit) -side right -pady 5 -padx 1
-    pack $top.mExit -side right -pady 5 -padx 1
+    pack $win.bottom.mExit -side right -pady 5 -padx 1
 
     # Insert tag defs (in precedence order)
     # N.B> This matters to 'plot-merge-info':
@@ -11847,12 +11849,18 @@ proc get_cde_params {} {
     return 1
 }
 
-# Maybe this could be enhanced to get configs from themes and so on?
-# Right now it just sets colors so everything isn't blinding white.
 proc get_aqua_params {} {
     global w
 
-    # Special settings not needed anymore for MacOS UI - dar
+    # Keep everything from being blinding white
+    option add *Frame.background #ebebeb userDefault
+    option add *Label.background #ebebeb userDefault
+    option add *Checkbutton.Background #ebebeb userDefault
+    option add *Radiobutton.Background #ebebeb userDefault
+    option add *Message.Background #ebebeb userDefault
+    # or else there are little white boxes around the button "pill"
+    option add *Button.highlightBackground #ebebeb userDefault
+    option add *Entry.highlightBackground #ebebeb userDefault
 }
 
 ###############################################################################
