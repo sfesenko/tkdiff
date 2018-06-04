@@ -1487,7 +1487,7 @@ proc commandline {} {
                 incr argindex
             }
         "^-" {
-                append opts(diffcmd) " [concat $arg] "
+                append opts(diffcmd) " " [concat "$arg"]
             }
         default {
                 incr pths
@@ -4716,13 +4716,10 @@ proc map-resize {args} {
     set mapheight [expr {[winfo height $w(map)] - $g(mapborder) * 2}]
 
     # We'll get a couple of "resize" events, so don't draw a map
-    # unless we've got the diffs and the map size has changed
-    if {$g(count) == 0 || $mapheight == $g(mapheight)} {
-        return
-    }
-
-    # If we don't have a map and don't want one, don't make one
-    if {$g(mapheight) == 0 && $opts(showmap) == 0} {
+    # unless the map size has changed -OR- 
+    # we don't have a map and don't want one, don't make one
+    if {$mapheight == $g(mapheight) \
+    || ($g(mapheight) == 0 && $opts(showmap) == 0)} {
         return
     }
 
@@ -4735,32 +4732,6 @@ proc map-resize {args} {
     set g(mapheight) $mapheight
     set g(mapwidth) $mapwidth
     create-map map $mapwidth $mapheight
-}
-
-###############################################################################
-# scroll to diff region nearest to y
-###############################################################################
-proc map-scroll {y} {
-    global g
-    global w
-    global opts
-
-    set yview [expr {double($y) / double($g(mapheight))}]
-    # Show text corresponding to map
-    catch {$w(RightText) yview moveto $yview} result
-    update idletasks
-
-    # Select & move to the diff region closest to the middle of the screen
-    set winhalf [expr {[winfo height $w(RightText)] / 2}]
-    move [find-diff [expr {int([$w(RightText) index @1,$winhalf])}]] 0 0
-
-    if {$opts(autocenter)} {
-        center
-    }
-
-    if {$g(showmerge)} {
-        merge-center
-    }
 }
 
 ###############################################################################
@@ -8155,42 +8126,48 @@ As an additional note regarding the $g(name) "<itl>suggested</itl>" merge file\
       course, place the output in any filename you designate.
 
 Finally, note that anything with a leading dash that is <itl>not</itl>\
-      recognized as a $g(name) option is passed through to diff.  This\
+      recognized as a $g(name) option is passed to your Diff command.  This\
       permits you to temporarily alter the way diff is called, without\
       resorting to a change in your preferences file. However it also means\
       that to use, for example, the "-d" option for GNU diff (which\
       <itl>is</itl> a $g(name) option), you must specify it using its\
       equivalent long form of "--minimal" (to avoid the collision).
-      As a related issue, trying to pass <itl>any</itl> option that requires\
-      a <bld>value</bld> <itl>MAY</itl> necessitate an uncommon form of\
-      quoting to preserve syntactically required "spaces".\
-      If the value portion has NO blanks and can be physically attached to its\
-      option flag, no special action is required. But if the value requires a\
-      "space" -or- must be separated from its option flag by one, then you\
-      should pass the entire construct as quoted. As an example, GNU diff has\
-      an option whose syntax is:
+      On a related issue, trying to pass <itl>any</itl> option that requires\
+      a <bld>value</bld> <itl>MAY</itl> necessitate an unusual form of\
+      quoting to preserve syntactically required "white space" characters.\
+      If the value portion has NO blanks and is permitted to be physically\
+      attached to its option flag, no special action is required. But if the\
+      value requires a "space" -or- must be SEPARATED from its option flag by\
+      one, then you should pass the entire construct <itl>within</itl> double\
+      quote characters, and perhaps even <itl>doubly</itl> so. As an example,\
+      GNU diff has an option whose syntax is:
       <bld>-I, --ignore-matching-lines=RE</bld>
-(<itl>A great example, but a VERY bad idea, because it effectively LIES to\
-      $g(name) about the relative COUNTS of the involved lines, causing a\
-      Left/Right misalignment of highlighting)</itl>. Yet, as an explanation\
-      of passing options that legitimately requires "spaces", its great.
-      Thus if you <itl>WERE</itl> to tell diff to not consider any line that\
-      starts with a octathorp (#) you might pass this to $g(name) as\
-      <itl>either</itl> :
-      --ignore-matching-lines=^#    (or even -I^#)
+A great example, <bld>but a VERY BAD idea</bld> (because it results in HIDING\
+      the relative COUNTS of involved lines to $g(name), causing it to\
+      misalign difference regions and highlighting, among other problems).\
+      Yet, as an explanation of passing options that may legitimately\
+      require "white space", it's perfect.
+      Thus if you <itl>WERE</itl> to try to tell Diff to not consider any line\
+      that starts with a octathorp (#) followed by a space, you might pass\
+      this to $g(name) as <itl>either</itl> :
+      "--ignore-matching-lines=^#  "   (or even "-I^#  ")
 or
-      <bld>"</bld>-I   ^#<bld>"</bld>
-Note in the second case, quoting of BOTH the flag and its value\
-      <itl>together</itl>. Without the quoting, $g(name) would only pass\
-      the <itl>flag</itl> and would treat the value portion as being a\
-      filename to be compared, leading most likely to complaints of failed\
-      diff execution due to misunderstood command syntax. The reason is simply\
-      that $g(name) <itl>has no knowledge</itl> of the flags being passed,\
-      nor if they might legitimately need a value, and thus requires it to\
-      be specified as a <itl>single</itl> construct, with embedded blanks.
-      REMEMBER - do not actually USE this particular GNU diff option...it was\
-      designed to make the <bld>direct</bld> output of diff <itl>itself</itl>\
-      more meaningful by simply suppressing what are in fact, differences.
+      <bld>"</bld>-I  <bld>\"</bld>^#  <bld>\" "</bld>    (or "-I  {^#  }")
+Note in each case, the quoting of BOTH the flag and its value\
+      <itl>together</itl>. But particularly, in the second form, the extra\
+      quoting (done using escaped double quotes or "brace" characters)\
+      surrounding the value as well; note that <itl>single</itl> quotes will\
+      NOT work here. Without this 'extra' quoting as shown, $g(name)\
+      <itl>would pass</itl> the option, but the resulting Diff would\
+      <itl>MISS</itl> the trailing blank of the RE.
+      The reason is simply that $g(name) <itl>has no understanding</itl> of\
+      any flags being passed, nor if they might legitimately need a value,\
+      or require said value to be separated from its flag while still\
+      <itl>preserving</itl> any embedded blanks.\
+      REGARDLESS - this particular GNU Diff option is <bld>not</bld>\
+      recommended...it was designed to make the <bld>direct</bld> output of\
+      Diff <itl>itself</itl> more meaningful to a <itl>human</itl> by simply\
+      suppressing what are in reality, actual differences.
     }
 
     if {$mode == "cline"} {
