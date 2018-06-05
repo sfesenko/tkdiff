@@ -2054,6 +2054,21 @@ proc create-display {} {
     bind $w(RightText) <Configure> [list plot-line-info Right]
     bind $w(mergeText) <Configure> [list plot-merge-info]
 
+    # Lastly, all wheel scrolling over the Info windows SHOULD work
+    #   (even though they themselves dont ACTUALLY scroll - they repaint)
+    # 'eval' simply eliminates vars from within the quoted bind-scripts
+    #   (???- found no way to just FORWARD the event to the Text widget)
+    foreach side {Left Right merge} {
+        foreach evt {Button-4 Button-5 Shift-Button-4 Shift-Button-5} {
+            eval bind $w(${side}Info) <$evt> \
+               "{event generate $w(${side}Text) <$evt> -when head}"
+        }
+        foreach evt {MouseWheel Shift-MouseWheel} {
+            eval bind $w(${side}Info) <$evt> \
+               "{event generate $w(${side}Text) <$evt> -delta %D -when head}"
+        }
+    }
+
     # other misc. bindings
     common-navigation $w(LeftText) $w(RightText) $w(LeftInfo) $w(RightInfo)
 
@@ -2354,21 +2369,6 @@ proc build-client {} {
     canvas $w(LeftInfo)  -highlightthickness 0
     canvas $w(RightInfo) -highlightthickness 0
 
-    # However, all wheel scrolling over the Info windows SHOULD work
-    #   (even though they themselves dont ACTUALLY scroll - they repaint)
-    # 'eval' simply eliminates vars from within the quoted bind-scripts
-    #   (???- found no way to just FORWARD the event to the Text widget)
-    foreach side {Left Right} {
-        foreach evt {Button-4 Button-5 Shift-Button-4 Shift-Button-5} {
-            eval bind $w(${side}Info) <$evt> \
-               "{event generate $w(${side}Text) <$evt> -when head}"
-        }
-        foreach evt {MouseWheel Shift-MouseWheel} {
-            eval bind $w(${side}Info) <$evt> \
-               "{event generate $w(${side}Text) <$evt> -delta %D -when head}"
-        }
-    }
-
     # this widget is the two line display showing the current line, so
     # one can compare character by character if necessary.
     text $w(BottomText) -wrap none -borderwidth 1 -height 2 -width 0
@@ -2437,7 +2437,7 @@ proc build-client {} {
            "{event generate \$g(activeWindow) <$evt> -when head}"
     }
     foreach evt {MouseWheel Shift-MouseWheel} {
-        eval bind $w(${side}Info) <$evt> \
+        eval bind $w(mapCanvas) <$evt> \
            "{event generate \$g(activeWindow) <$evt> -delta %D -when head}"
     }
 
