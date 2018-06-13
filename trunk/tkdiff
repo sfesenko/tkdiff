@@ -1542,7 +1542,6 @@ proc assemble-args {} {
     global opts
     global g
 
-    set msg ""
     if {$g(ancfile) != ""} {
         set g(ancfileset) 1
     }
@@ -1565,8 +1564,10 @@ proc assemble-args {} {
         }
     }
     # Save the CURRENT derived values (in case NEWLY derived values fail)
+    # and establish a catchall failure msg (should NEVER actually see it)
     set priorVals [array get finfo {[ptl]*[0-9]}]
     array unset finfo {[ptl]*[0-9]}
+    set msg "Unexpected failure (internal error)"
 
     debug-info " Recovered $pths filespecs, $revs revisions"
 
@@ -1587,7 +1588,6 @@ proc assemble-args {} {
     set cnt 0 ;# Track how many IMPLIED files ultimately are derived
 
     if {$g(conflictset)} {
-        set msg "you specified $pths filespec(s) for a conflict resolution"
         if {$revs == 0 && $pths == 1} {
             #################################################################
             # tkdiff -conflict FILE
@@ -1600,9 +1600,9 @@ proc assemble-args {} {
             # are taken from the <<<<<<< and >>>>>>> lines inside it.
             set finfo(lbl,1) [lindex "$files" 2]
             set finfo(lbl,2) [lindex "$files" 3]
-            incr cnt 2
+            set cnt 2
         } else {
-            fatal-error "Usage: tkdiff -conflict FILE"
+            set msg "a -conflict run should have ONLY 1 filespec (we saw $pths)"
         }
     } else {
         set msg "you specified $pths filespec(s) and $revs revision(s)"
@@ -2569,6 +2569,7 @@ proc compute-inlines {optNam {retag 0}} {
 #                        - Added byte-by-byte algorithm.
 #       10/08/2017 : mpm - Simplified byte-by-byte alg.
 #                        - Revised generated output data format (both alg.)
+#       06/12/2018 : mpm - Rewrote lcs-string (again) to be even faster.
 #
 # the recursive version is derived from the Ratcliff/Obershelp pattern
 # recognition algorithm (Dr Dobbs July 1988), where we search for a
@@ -2589,40 +2590,31 @@ proc lcs-string {s1 off1 len1 s2 off2 len2 lcsoff1_ref lcsoff2_ref} {
     set s1 [string range $s1 $off1 [expr $off1+$len1-1]]
     set s2 [string range $s2 $off2 [expr $off2+$len2-1]]
 
-    set j 0
+    set snpBgn 0
 
-    while {1} {
+    for {set tmpoff -1} {$snippetlen < $len2-$snpBgn} {incr snpBgn} {
         # increase size of matching snippet
-        while {$snippetlen < $len2-$j} {
-            set tmp "$snippet[string index $s2 [expr $j+$snippetlen]]"
-            if {[string first $tmp $s1] == -1} {
+        while {$snippetlen < $len2-$snpBgn} {
+            set tmp "$snippet[string index $s2 [expr $snpBgn+$snippetlen]]"
+            if {[set i [string first $tmp $s1]] == -1} {
                 break
             }
+            set tmpoff $i
             set snippet $tmp
             incr snippetlen
         }
-        if {$snippetlen == 0} {
-            # nothing starting at this position
-            incr j
-            if {$snippetlen >= $len2-$j} {
-                break
-            }
-        } else {
-            set tmpoff [string first $snippet $s1]
+        if {$snippetlen > 0} {
+            # new longest?
             if {$tmpoff != -1 && $snippetlen > $longestlen} {
-                # new longest?
-                set longest $snippet
                 set longestlen $snippetlen
                 set lcsoff1 [expr $off1+$tmpoff]
-                set lcsoff2 [expr $off2+$j]
+                set lcsoff2 [expr $off2+$snpBgn]
             }
             # drop 1st char of prefix, but keep size the same as longest
-            if {$snippetlen >= $len2-$j} {
-                break
+            if {$snippetlen < $len2-$snpBgn} {
+                set snippet "[string range $snippet 1 end][string index $s2 \
+                                                  [expr $snpBgn+$snippetlen]]"
             }
-            set snippet "[string range $snippet 1 end][string index $s2 \
-              [expr $j+$snippetlen]]"
-            incr j
         }
     }
     return $longestlen
@@ -2643,7 +2635,13 @@ proc fid-ratcliff-aux {hID pairID s1 off1 len1 s2 off2 len2} {
     set lcsoff1 -1
     set lcsoff2 -1
 
-    set ret [lcs-string $s1 $off1 $len1 $s2 $off2 $len2 lcsoff1 lcsoff2]
+    # Non-obvious speedup: Best if argsets passed in (longer, shorter) order
+    #      (operation is commutative and performs fewer internal iterations)
+    if {$len2 < $len1} {
+        set ret [lcs-string $s1 $off1 $len1 $s2 $off2 $len2 lcsoff1 lcsoff2]
+    } else {
+        set ret [lcs-string $s2 $off2 $len2 $s1 $off1 $len1 lcsoff2 lcsoff1]
+    }
 
     if {$ret > 0} {
         set rightoff1 [expr $lcsoff1+$ret]
