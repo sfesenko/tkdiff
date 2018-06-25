@@ -1,4 +1,26 @@
-4.3             (2018):
+4.3.1           (06/25/2018):
+     * Repaired crash(v4.3) when using the "-conflict file" option
+     * Supports Diff 'suppresion' options (Empty or RE-matched lines)
+       with ability to enter/manage/save rules, activate from cmdline,
+       and interoperate with any supportable 'diff' engine
+     * Enhanced and expanded preferences coverage
+     - previously hidden settings exposed (map and collision colors)
+     - color used during Split/Combine for boundary movement feedback
+     - provided interactive color chooser for above
+     - added new 'suppression' settings
+     - added new 'default side' choice for merge initialization
+     - redesigned layout of checkboxes for better readability
+     - enhanced feedback for inter-related settings, and or editting
+     * builtin file editor now opens at the current diff region
+     * avoid unneeded display updates when nothing applicable changed
+     * Editorial revisions of online help info (new and old content)
+     - better explanations of 'quoting', interfacing to 'diff', and
+       more uniform typography
+     * minor internal consolidations- dead code removal, upgrade to
+       later version of embedded software, contrib patches, etc.
+
+
+4.3             (06/06/2018):
      * Add ability to create a file-pairs list from a Git diff (by Kevin X),
        then extended (by vampm) facilitating other sources of multi-pairs,
        including local directory-to-directory comparisons and Subversion.
