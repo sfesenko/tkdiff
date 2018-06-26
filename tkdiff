@@ -4391,7 +4391,7 @@ proc customize-initLabels {} {
 
     # Alphabetical by prefNAME, (annotated w/pane of 'customize' it appears on)
     #      A = Appearance     G = General     D = Display
-    set pref(adjcdr)           {CDR region color during adjustment }            ;# A
+    set pref(adjcdr)           {CDR region color during adjustment }      ;# A
     set pref(autocenter)      {Automatically center current diff region } ;#G
     set pref(autoselect) {Auto-select nearest diff region when scrolling} ;#G
     set pref(bytetag)          {Tag options for characters in line view}  ;#  A
@@ -4511,7 +4511,7 @@ proc apply {} {
     grid $w(LeftLabel) -row 0 -column 0 -sticky ew
     grid $w(RightLabel) -row 0 -column 2 -sticky ew
 
-    #NOTE: This loop is basically "testing" each NEW setting for syntactic
+    #NOTE: This loop is basically "testing" each NEW tag setting for syntactic
     #      validity (as well as 'installing' them). H O W E V E R ...
     #      it is EXPECTED to be tag-precedence-neutral as each name SHOULD
     #      already be in existence - thus no CHANGE in precedence should occur!
@@ -4550,35 +4550,52 @@ proc apply {} {
       [expr {2*$tabstops +($cwidth * 2)}]]
 
     # Set remaining 'opts' to the values from 'tmpopts'
+    # PAY ATTENTION:
     #   Most options represent "data state" values and can simply be 'set',
-    #   but some are TRANSITION (or 'edge') triggered and thus must act
+    #   but some are TRANSITION (or 'edge') triggered and thus must notice
     #   when they are being CHANGED, more so than their final value.
-    #       Of such 'edge' options, SEQUENCE *can* make a difference,
-    #   such as the 'ignore...' group, which because each might force a
-    #   REdiff, could influence OTHER settings, such as skipping steps
-    #   which ultimately get redone anyway (such as inline-diff processing,
-    #   which ITSELF has its own sequence issue [2 NEARLY mutually exclusive
-    #   values]).
-    #       We also wish to avoid the time it can take to RE-tag everything
+    #
+    #       With such 'edge' options, SEQUENCE *does* make a difference,
+    #   such as the 'ignore...' group, which could force a REdiff and thus
+    #   influence OTHER settings, such as skipping tasks which ultimately get
+    #   redone anyway (such as inline-diff processing, which ITSELF has its
+    #   own sequence issue [unwinding 2 NEARLY mutually exclusive values]).
+    #       We also want to avoid the time it can take to RE-tag everything
     #   (via a call to 'remark-diffs') if we dont need to - so we have to
     #   watch for CHANGES among the options that *could* have altered tags.
     #
-    # SO - CAUTION is advised when re-arranging/adding to this list
+    # BUT WE CANT assess *all* of that until we've seen ALL the settings
+    #   (or worse, write code to handle each COMBINATION that might occur)
     #
-    #   (N.B.: when startup coding invokes 'apply', it does so by COPYING
-    #   'opts' to 'tmpopts' first - as such, transitions can NEVER exist.)
+    # SO - we 'pre-arrange' those settings having their OWN issues into a
+    # sub-order we can depend on (to write the logic ONE way), and then post
+    # flag values we can assess AFTERWARD to enforce the larger precedence
+    # issues - thus avoiding the "excess" work alluded to above.
     #
-    set redoDiff ""          ;# init locals needed for handling transitions
-    set remark 0
-    set other(showinline1) showinline2
-    set other(showinline2) showinline1
-    set inlActn {}
-    foreach key {ignoreRegexLnopt ignoreRegexLn ignoreblanksopt ignoreblanks \
-            ignoreEmptyLn autocenter autoselect chgtag colorcbs currtag \
-            deltag diffcmd difftag editor fancyButtons filetypes geometry \
-            inlinetag instag overlaptag predomMrg showcbs showinline1 \
-            showinline2 showlineview showln showmap syncscroll tabstops \
-            tagcbs tagln tagtext textopt tmpdir toolbarIcons} {
+    #   (N.B.: when the startup coding invokes 'apply', it does so by COPYING
+    #   'opts' into 'tmpopts' first - as such, no transition can NEVER exist.)
+
+    # First we need an 'inversion' primitive to access meta-state values ...
+    set OTHER(showinline1) showinline2
+    set OTHER(showinline2) showinline1
+
+    # ... next, preloading of the keys needing their OWN precedence order ...
+    #   (changing of an '...opt' field that IS [and WILL] remain in use)
+    lappend keys ignoreRegexLnopt ignoreRegexLn ignoreblanksopt ignoreblanks
+    #   (switching among inline algorithms, including to ON or OFF)
+    lappend keys showinline1 showinline2
+
+    #   (then everything ELSE - alphabetically [a code reading convenience])
+    lappend  keys autocenter autoselect bytetag chgtag colorcbs  currtag \
+                  deltag diffcmd difftag editor fancyButtons filetypes \
+                  geometry ignoreEmptyLn inlinetag instag overlaptag \
+                  predomMrg showcbs showlineview showln showmap syncscroll \
+                  tabstops tagcbs tagln tagtext textopt tmpdir toolbarIcons
+
+    # ... finally, init the flags we need to derived - and then GET TO IT!!
+    set remark 0                     ;# start as: 'remark' will not be run,
+    set inlActn [set redoDiff {}]    ;#  nor will Diff or 'compute-inlines'
+    foreach key $keys {
         if {"$tmpopts($key)" ne "$opts($key)"} {
             # What is transitioning ?
             switch $key {
@@ -4619,12 +4636,12 @@ proc apply {} {
                     # Basically has only 3 possibilities:
                     #
                     # ... a DOUBLE transition: MUST select the eventual 'ON'
-                    if {"$tmpopts($other($key))" ne "$opts($other($key))"} {
+                    if {"$tmpopts($OTHER($key))" ne "$opts($OTHER($key))"} {
                         if {$tmpopts($key)} {
                             #   THIS opt *is* the 'ON', but must then PRESET
                             # the other OFF (to eliminate the 2nd transition)
-                            set inlActn "compute-inlines $key false"
-                            set opts($other($key)) 0
+                            set inlActn "compute-inlines $key"
+                            set opts($OTHER($key)) 0
                         }
                         # (assist "compute-inlines" with a NEEDED data flush)
                         array unset g "inline,*"
@@ -4632,10 +4649,10 @@ proc apply {} {
                     # ... a single OFF -> ON transition
                     #     (or ALLOWED 2nd transition from prior DOUBLE)
                     } elseif {$tmpopts($key)} {
-                        set inlActn "compute-inlines $key false"
+                        set inlActn "compute-inlines $key"
 
                     # ... a single ON -> OFF transition
-                    } else { set inlActn "compute-inlines {} false" }
+                    } else { set inlActn "compute-inlines {}" }
                 }
 
                 "chgtag"     -
@@ -4651,17 +4668,9 @@ proc apply {} {
         }
         set opts($key) $tmpopts($key)
     }
-    eval $inlActn    ;# Perform DETECTED (if any) inline recomputation action
-    # If anyone cares, "inlActn" can ONLY be set in "remark"-mode, and AVOIDS
-    # being set TWICE because the EXTRA 'set  opts' in the DOUBLE case PRESETS
-    # the OFF transition value, ELIMINATING its detection on the next loop
-    # iteration. N.B. "inline,*" removal necessary here - else undetectable.
 
-    if {$opts(fancyButtons)} {
-        set opts(relief) flat
-    } else {
-        set opts(relief) raised
-    }
+    # interpret this binary toggle into its true value
+    set opts(relief) [expr {$opts(fancyButtons) ? "flat" : "raised"}]
 
     # Need to TRANSLITERATE the USER input form of "Text tags" that deal with
     # the display attrs of Text, LineNumbers and/or ChangeBars, and INSTEAD
@@ -4672,13 +4681,21 @@ proc apply {} {
     # but WITHOUT the potential line-skewing introduced by TK V8.5 enhancements
     translit-plot-txtags $w(LeftText) ;# L/R Text attrs identical: just grab 1
 
-    # Re-mark all the diff regions (unless we will be REDOing them altogether),
-    if {$remark && ($redoDiff == "")} {
-        remark-diffs
-        show-status ""
+    # Walk down our DERIVED precedence-list flags and find out what needs doing
+    #   (which is nothing if its all being handled by forcing a whole new Diff)
+    if {$redoDiff == ""} {
+        # (what about any altered tag SETTINGs ?)
+        if {$remark} {
+            eval $inlActn ;# MAYBE recompute inlines (so they CAN be tagged ?)
+            remark-diffs
+            show-status ""
+        # (or how about ONLY an altered inline algorithm or on/off state ?)
+        } elseif {"$inlActn" != ""} {
+            eval $inlActn 1 ;# recompute the inlines, but tag ONLY them
+        }
     }
 
-    # align, (show or hide) various data (Lnums, Cbars, etc.), and we are done
+    # Align, (show or hide) various data (Lnums, Cbars, etc.), and we are done
     reconfigure-toolbar
     do-show-Info
     do-show-map
@@ -8726,17 +8743,17 @@ The remaining tools on the toolbar consist of the <btn>Find</btn> tool for\
 
 When a text widget has the focus, you may use the following shortcut keys:
 <cmp>
-	c	Center current diff
-	f	First diff
-	j	Load NEXT file pair (from File->File List)
-	k	Load PREV file pair (from File->File List)
-	l	Last diff
-	n	Next diff
-	p	Previous diff
-	1	Merge Choice 1
-	2	Merge Choice 2
+	c      Center current diff
+	f      First diff
+	j      Load NEXT file pair (from File->File List)
+	k      Load PREV file pair (from File->File List)
+	l      Last diff
+	n      Next diff
+	p      Previous diff
+	1      Merge Choice 1
+	2      Merge Choice 2
 </cmp>
-The cursor, Home, End, PageUp and PageDown keys work as expected, adjusting\
+The cursor keys, Home, End, PageUp and PageDown work as expected, adjusting\
       the view in whichever text window has the focus. Note that if\
       <btn>Synchronize Scrollbars</btn> is set in\
       <btn>Preferences</btn>, both windows will scroll at the same time.
@@ -9309,7 +9326,7 @@ There is an additional setting built-in to the Preferences file called\
 This item, typically required the use of XResources in the past to do\
     correctly, but the following is much simpler:
 <cmp>
-		set w(selcolor) orange
+	      set w(selcolor) orange
 </cmp>
 makes it easier to see which of the four icons is presently "selected", as\
     the default is generally only a greyed background shading of the\
@@ -9438,7 +9455,7 @@ proc do-edit {} {
     if {[info exists finfo(tmp,$ndx)]} {
         do-error "This file is not editable"
     } else {
-	# Got the file - GET the line number
+        # Got the file - GET the line number
         set file "$finfo(pth,$ndx)"
         foreach {line na na O(1) na na O(0)} $g(scrInf,$g(currdiff)) {break}
         incr line -$O([expr {int($ndx & 1)}])
@@ -9529,7 +9546,7 @@ proc simpleEd {command args} {
             set fd [open $filename]
             $w.text insert 1.0 [read $fd]
             close $fd
-	    $w.text see $line.0
+            $w.text see $line.0
         }
     save {
             set filename [lindex $args 0]
