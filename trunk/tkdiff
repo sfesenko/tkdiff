@@ -43,7 +43,7 @@ wm withdraw .
 
 # set a couple o' globals that we might need sooner than later
 set g(name) "TkDiff"
-set g(version) "4.3.1"
+set g(version) "4.3.2"
 set g(startPhase) 0
 
 # FIXME - move to preferences
@@ -2700,18 +2700,16 @@ proc fid-ratcliff-aux {hID pairID s1 off1 len1 s2 off2 len2} {
 proc find-inline-diff-ratcliff {hID pairID s1 s2} {
     global g
 
-    if {[set len1 [string length $s1]] && [set len2 [string length $s2]] } {
-        return [fid-ratcliff-aux $hID $pairID $s1 0 $len1 $s2 0 $len2]
-    }
-    if {![info exists g(inline,$hID)]} {set g(inline,$hID) [list]}
+    if {![set len1 [string length $s1]] || ![set len2 [string length $s2]] } {
     return 0
+    }
+    return [fid-ratcliff-aux $hID $pairID $s1 0 $len1 $s2 0 $len2]
 }
 
 proc find-inline-diff-byte {hID pairID s1 s2} {
     global g
 
     if {![set len1 [string length $s1]] || ![set len2 [string length $s2]] } {
-        if {![info exists g(inline,$hID)]} {set g(inline,$hID) [list]}
         return 0
     }
 
@@ -6448,13 +6446,27 @@ proc remark-inline {hID {reCfgSkew true}} {
     global w
     #debug-info "remark-inline ($hID)"
 
+    # N.B> Oddly enough, it is legitimately POSSIBLE that ABSOLUTELY IDENTICAL
+    # linepairs can be 'inline-diff'ed resulting in NO output list of ranges!
+    #   eg.:     1c1,2
+    #                  |  abc  |     |  abc  |     <--- compares identical
+    #                  |       |     |  d e  |     <--- skips (left is empty)
+    #                  |  xyz  |     |  xyz  |
+    #   versus:  1a2
+    #                  |  abc  |     |  abc  |
+    #                  |       |     |  de   |     (only 'c' types do inlines)
+    #                  |  xyz  |     |  xyz  |
+    #
+    #      (Diff output can be quite capricious at times!!)
+    if {[info exists g(inline,$hID)]} {
     set wdg(l) "LeftText"
     set wdg(r) "RightText"
 
     # Presumes 'inlinetag' was ALREADY removed from BOTH Text widgets
     foreach {Lno} $g(scrInf,$hID) {break}
-    foreach {side lndx startcol endcol} $g(inline,$hID) {
-        add-tag $w($wdg($side)) inlinetag [incr lndx $Lno] $startcol $endcol
+        foreach {side lndx Scol Ecol} $g(inline,$hID) {
+            add-tag $w($wdg($side)) inlinetag [incr lndx $Lno] $Scol $Ecol
+        }
     }
     de-skew-hunk $hID $reCfgSkew
 }
@@ -7060,11 +7072,11 @@ proc centerWindow {w {size {}}} {
 ###############################################################################
 proc newDiffDialog {} {
     debug-info "newDiffDialog"
-    global g w
-    global finfo
+    global g w finfo opts pref
     global waitvar
 
     set waitvar {}
+    customize-initLabels ;# Needed for access to global 'pref' array
 
     if {![info exists w(newDiffPopup)]} {
         set w(newDiffPopup) .newDiffPopup
@@ -7093,6 +7105,11 @@ proc newDiffDialog {} {
         label $simple.l2 -text "File 2:"
         entry $simple.e1 -textvariable finfo(f,1)
         entry $simple.e2 -textvariable finfo(f,2)
+        set mrgopt [frame $simple.f3] ;# (pre-pack these into a SINGLE handle)
+          label $mrgopt.l3 -text "$pref(predomMrg):" -anchor w
+          radiobutton $mrgopt.r1 -variable opts(predomMrg) -text Left  -value 1
+          radiobutton $mrgopt.r2 -variable opts(predomMrg) -text Right -value 2
+          pack $mrgopt.l3 $mrgopt.r1 $mrgopt.r2 -side left
 
         # Rev labels will reflect when rev entry is non-null
         label $simple.lr1 -text "-r"
@@ -7128,6 +7145,8 @@ proc newDiffDialog {} {
         grid $simple.l2 -row 2 -column 0 -sticky e
         grid $simple.e2 -row 2 -column 1 -columnspan 4 -sticky nsew -pady 4
         grid $simple.b2 -row 2 -column 5 -sticky nsew -padx 4 -pady 4
+
+        grid $simple.f3 -row 4 -column 0 -columnspan 4 -sticky w -pady 4
 
         grid columnconfigure $simple 1 -weight 1
         grid columnconfigure $simple 4 -weight 2
@@ -7224,6 +7243,8 @@ proc open-more-options {} {
     grid $w(newDiffPopup).options.l1e -row 2 -column 2 -sticky nsew -pady 4
     grid $w(newDiffPopup).options.l2l -row 3 -column 1 -sticky e
     grid $w(newDiffPopup).options.l2e -row 3 -column 2 -sticky nsew -pady 4
+
+    grid columnconfigure $w(newDiffPopup).options 2 -weight 1
 
     $w(newDiffPopup).options.more configure -text "Less" \
       -command close-more-options
@@ -8321,8 +8342,8 @@ In the first form, $g(name) will generally present a dialog to allow you to\
       view, as they are often not applicable except in special cases. If you\
       need to set them, <bld>do not</bld> re-"hide" them before clicking the\
       <btn>Ok</btn> button on the dialog as hiding them <itl>ALSO</itl> causes\
-      them ALL to become completely <bld>unset</bld>. Those items not available\
-      in that dialog ('ignore...' and '1/2') are provided elsewhere in $g(name).
+      them ALL to become completely <bld>unset</bld>. Any items not provided\
+      on that dialog ('Ignore...' settings) are presented elsewhere in $g(name).
 
 In the second form, either or both <cmp>FILESPEC</cmp>s may be to a local file\
       or directory, or symbolic links to such. When a directory is involved,\
@@ -9021,7 +9042,7 @@ An editable dropdown list of Regular Expressions that is used to identify text\
 
 Another editable dropdown list of file suffixes you may wish to see in the\
       various file open and save dialogs throughout the tool. Editting\
-      procedures are as discribed immediately above, except that the format\
+      procedures are as described immediately above, except that the format\
       is that of two "words" separated by white space. The first word is used\
       as a label, and if it contains spacing, should be enclosed in\
       <bld>braces</bld>. The second is a file-glob pattern for the applicable\
