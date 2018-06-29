@@ -1,4 +1,10 @@
-4.3.1           (06/25/2018):
+4.3.2           (06/28/2018):
+     * Fixed obtuse data-dependant fatal crash caused by inline-diff
+       of IDENTICAL lines (induced by Diff itself).
+     * minor fixes to newDiff dialog (absent V4.3.1 param), resizing
+     * random typos in help info
+
+4.3.1           (06/26/2018):
      * Repaired crash(v4.3) when using the "-conflict file" option
      * Supports Diff 'suppresion' options (Empty or RE-matched lines)
        with ability to enter/manage/save rules, activate from cmdline,
