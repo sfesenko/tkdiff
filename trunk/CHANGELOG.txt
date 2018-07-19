@@ -1,3 +1,18 @@
+4.3.3           (07/19/2018):
+     * Critical bug that MIGHT corrupt Merge content via Split use fixed
+     * Re-implementation of 3way Diff support now functions properly
+     - merge choices are preset via 3way analysis AHEAD of user preference
+     - resolved collisions (when possible) also removes its display markup
+     * Added status msgs (to a popup), in lieu of a busy cursor, at pgm
+       startup w/SCM use to account for potential network latency delay
+     - new help info for 3way support/strategy plus latency effects
+     * Small bugs/inconsistencies repaired
+     - Collision color in the DiffMap now honors its preference value
+     - DiffMap is redrawn as needed for Split/Combine and/or collisions
+     - Misleading (inactive) filelist per-file 'menu accelerators' removed
+     - Avoids crash (chooses line 1) when no CDR exists and invoking Editor
+     - Report Save-as filename browser lacked the filetypes option setting
+
 4.3.2           (06/28/2018):
      * Fixed obtuse data-dependant fatal crash caused by inline-diff
        of IDENTICAL lines (induced by Diff itself).

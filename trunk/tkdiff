@@ -43,7 +43,12 @@ wm withdraw .
 
 # set a couple o' globals that we might need sooner than later
 set g(name) "TkDiff"
-set g(version) "4.3.2"
+set g(version) "4.3.3"
+
+# Startup phases:
+#   0  : Bare metal, looking for viable cmd args
+#   1  : Transitioning to GUI mode and/or major datastruct upheavals
+#   2  : Operational mode
 set g(startPhase) 0
 
 # FIXME - move to preferences
@@ -175,6 +180,15 @@ option add *Entry.font $entryfont userDefault
 option add *Dialog.msg.font $labelfont userDefault
 
 # Initialize arrays
+#######################
+# On-demand Asynchronous machinery
+#    (existance of element 'trigger' activates it)
+array set ASYNc {
+    out             ""
+    events          0
+}
+
+# general globals
 array set g {
     ancfileset      0
     conflictset     0
@@ -188,10 +202,11 @@ array set g {
     mapheight       0
     mapScrolling    0
     mergefile       ""
+    mergefileset    0
     returnValue     0
     showmerge       0
-    startPhase      0
-    mergefileset    0
+    statusCurrent   "Standby...."
+    statusInfo      ""
     tempfiles       ""
     thumbMinHeight  10
     thumbHeight     10
@@ -408,7 +423,19 @@ catch {tk scaling [expr {100.0 / 72}]}
 ###############################################################################
 proc do-exit {{returncode {}}} {
     debug-info "do-exit ($returncode)"
-    global g
+    global g w ASYNc
+
+    # During pgm startup, we MAY have built the status window just to let the
+    # user know we are talking to a SCM server that MIGHT experience network
+    # latency - so if that window exists (but OTHER windows do not) and we are
+    # here, something died and we want to RELEASE that window before we leave.
+    if {[info exists w(status)] && ![info exists w(client)]} {
+        debug-info "something died (or was killed) ... trying to shutdown"
+        catch {wm forget $w(status)}
+        # Release any extra event loop (if it is running) so we CAN leave
+        set ASYNc(events) 0
+        unset -nocomplain ASYNc(trigger) ;# not much point, but it IS correct
+    }
 
     # we don't particularly care if del-tmp fails.
     catch {del-tmp}
@@ -480,32 +507,79 @@ proc tmpfile {n {forget 0}} {
 }
 
 ###############################################################################
-# Execute a command.
-# Returns "$stdout $stderr $exitcode" if exit code != 0
+# Execute an external command, optionally storing STDOUT into a given filename
+# Returns the 3-tuple list "$stdout $stderr $exitcode"
+#
+# Operation is sensitive to the EXISTANCE (not value) of flag "ASYNc(trigger)"
+# to run in ASYNChronous .vs. BLOCKing mode. When running ASYNC, the event loop
+# is available for dispatching tasks encountered WHILE the command is processed 
 ###############################################################################
-proc run-command {cmd} {
-    #debug-info "run-command ($cmd)"
-    global opts errorCode
+proc run-command {cmd {out {}}} {
+    debug-info "run-command ($cmd $out)"
+    global ASYNc errorCode
 
-    set stderr ""
+    # Arrange for requested output format (given execution constraints)
+    #  N.B> 'fout' will become one of: a channel, a cmd indirection, or empty.
+    if {[info exists ASYNc(trigger)]} {
+        if {[set fout $out] != {}} {
+            set fout [open $out wb]
+            chan configure $fout -buffering none
+        } {upvar #0 ASYNc(out) STDout}
+    } elseif {[set fout $out] != {}} {set fout "\">$out\""}
+
+    # Establish default answers
+    set STDerr [set STDout ""]
     set exitcode 0
-    set errfile [tmpfile "cmderr" 1] ;# dont retain filename; we'll delete here
-    debug-info "$cmd"
-    set failed [catch "$cmd \"2>$errfile\"" stdout]
-    # Read stderr output
-    catch {
-        set hndl [open "$errfile" r]
-        set stderr [read $hndl]
-        close $hndl
+    set cmderr [tmpfile "cmderr" 1] ;# retain filename locally; WE will whack
+    #   (N.B> stderr redirection prevents 'catch' from assuming msgs -> errors)
+
+    # But the big difference in ASYNC .vs. BLOCKing is how to deal with STDOUT
+    if {[info exists ASYNc(trigger)]} {
+        debug-info  "Cmd running in ASYNC mode"
+
+        # Startup the cmd (so we can attach its stdout to the event loop) ...
+        # ..where an (anonymous) handler will snag any/all STDOUT produced, but
+        # more importantly WATCHES for an EOF, telling us the cmd has completed
+        set cmdout [open "|$cmd \"2>$cmderr\"" rb]
+        chan configure $cmdout -blocking 0 -buffering none
+        chan event $cmdout readable [list wontapply $cmdout $fout]
+            #  <*> Well... it was SUPPOSED TO BE an anonymous handler proc :
+            # [list apply {{in out} {<*per 'wontapply' below*>}} $cmdout $fout]
+            #
+            #   BUT V8.6.3 bitches with "syntax: 'apply' should be 'apply'"
+            # which ITSELF is wrong as its complaint SHOULD'VE been:
+            #    "'apply' should be 'apply lambda in out'"    or similar,
+            # thus SOMETHING isnt being parsed properly along the way.... 
+
+        set ASYNc(events) 1
+        ####
+        vwait ASYNc(events) ;# wait here until we see EOF from handler above
+        ####
+        chan configure $cmdout -blocking 1 ;# (N.B> to get errorcodes)
+        if {[set failed [catch "close $cmdout"]]} {set errCODE $errorCode}
+        debug-info "Back from ASYNC cmd: rc($failed)"
+        if {$fout != {}} {close $fout}
+
+    } elseif {[set failed [catch "exec $cmd $fout \"2>$cmderr\"" STDout]]} {
+        set errCODE $errorCode ;# Snag this before it can get overwritten
     }
+
+    # Suck out any error messages that MAY have been produced (and whack file)
+    catch {
+        set hndl [open "$cmderr" r]
+        set STDerr [read $hndl]
+        close $hndl
+        file delete $cmderr
+    }
+
     if {$failed} {
-        switch -- [lindex $errorCode 0] {
+        switch -- [lindex $errCODE 0] {
         "CHILDSTATUS" {
-                set exitcode [lindex $errorCode 2]
+                set exitcode [lindex $errCODE 2]
             }
         "POSIX" {
-                if {$stderr == ""} {
-                    set stderr $stdout
+                if {$STDerr == ""} {
+                    set STDerr $STDout
                 }
                 set exitcode -1
             }
@@ -515,8 +589,19 @@ proc run-command {cmd} {
         }
     }
 
-    catch {file delete $errfile}
-    return [list "$stdout" "$stderr" "$exitcode"]
+   #debug-info "runcmd RESULTS($exitcode): out([string length $STDout])\
+                                err([string length $STDerr]) appropriate ?"
+    return [list "$STDout" "$STDerr" "$exitcode"]
+}
+
+# This stupidity SHOULD be an 'apply' scriptlet, but it bitches: "syntax"!
+#   (hence its NON-anonymous name - see 'chan event' call above)
+proc wontapply {fin fout} {
+    global ASYNc
+    if {$fout != {}} {
+        puts -nonewline $fout  [chan read $fin]
+    } else {append ASYNc(out) [chan read $fin]}
+    if {[chan eof $fin]} {set ASYNc(events) 0}
 }
 
 ###############################################################################
@@ -531,7 +616,7 @@ proc scm-chkget {ndx} {
     }
     debug-info "scm-chkget ($ndx) -> '$finfo(tmp,$ndx)': $finfo(pth,$ndx)"
 
-    set result [run-command "$finfo(tmp,$ndx) \">$finfo(pth,$ndx)\""]
+    set result [run-command "$finfo(tmp,$ndx)" "$finfo(pth,$ndx)"]
     set stdout [lindex $result 0]
     set stderr [lindex $result 1]
 
@@ -616,7 +701,7 @@ proc do-show-Info {{which {}}  {force {}}} {
     }
 
     # Detect if/when text Info windows should be mapped OR unmapped
-    if {$opts(showln) || $opts(showcbs)} {
+    if {$opts(showln) || $opts(showcbs) || $g(ancfileset)} {
         if {! [winfo ismapped $w(LeftInfo)]} {
             grid $w(LeftInfo)  -row 0 -column 1 -sticky nsew
             grid $w(RightInfo) -row 0 -column 0 -sticky nsew
@@ -628,7 +713,7 @@ proc do-show-Info {{which {}}  {force {}}} {
 
     # The mergeInfo window (for now) is ALWAYS 'on' ...
     # However if we ever create an opt() for the "contrib markers"
-    # then simply uncomment this to get it turn on/off like above
+    # then simply uncomment this to get it to turn on/off like above
 #   if {$opts(showln) || $opts(XXX-contrib-XXX)} {
 #       if {! [winfo ismapped $w(mergeInfo)]} {
 #           grid $w(mergeInfo) -row 0 -column 0 -sticky nsew
@@ -676,9 +761,10 @@ proc translit-plot-txtags {twdg} {
     set  Aft [set Hft [font metrics $Fnt -ascent]] ;# ascent of font
     incr Hft [font metrics $Fnt -descent]          ;# height of font
 
-    set Dw [font measure $Fnt "8"]                 ;# Digit width
+    set Dw [font measure $Fnt "8"]                 ;# Digit  width
     set Cw [font measure $Fnt "+"]                 ;# ChgBar width
-    set Sw [font measure $Fnt " "]                 ;# Space width
+    set Sw [font measure $Fnt " "]                 ;# Space  width
+    set Mw [font measure $Fnt "M"]                 ;#  Em    width
 
     # Begin the database with a snapshot of the "settings" for what is
     # (effectively) the "textopt" tag layer (plain old file lines)
@@ -704,6 +790,7 @@ proc translit-plot-txtags {twdg} {
                     set Dw [max $Dw [font measure $Fnt "8"]] ;# maximal Dw
                     set Cw [max $Cw [font measure $Fnt "+"]] ;# maximal Cw
                     set Sw [max $Sw [font measure $Fnt " "]] ;# maximal Sw
+                    set Mw [max $Mw [font measure $Fnt "M"]] ;# maximal Mw
                     }
             }
         }
@@ -744,6 +831,7 @@ proc translit-plot-txtags {twdg} {
                         set Dw [max $Dw [font measure $Fnt "8"]] ;# maximal Dw
                         set Cw [max $Cw [font measure $Fnt "+"]] ;# maximal Cw
                         set Sw [max $Sw [font measure $Fnt " "]] ;# maximal Sw
+                        set Mw [max $Mw [font measure $Fnt "M"]] ;# maximal Mw
                         }
                 }
             }
@@ -765,7 +853,7 @@ proc translit-plot-txtags {twdg} {
     # Finally, post the data needed by 'cfg-line-info' to compute canvas width
     # AND the complete database of precomputed attrs for 'plot-line-info' with
     # its 11 values: "t, td, td+, td!, td-, td?, tdc, tdc+, tdc!, tdc-, tdc?"
-    set g(scrInf,cfg) "$Dw $Cw $Sw"
+    set g(scrInf,cfg) "$Dw $Cw $Sw $Mw"
     set g(scrInf,tags) $DB
 }
 
@@ -778,28 +866,34 @@ proc cfg-line-info {} {
     global w
 
     # First obtain the maximal Text widget font measurements
-    foreach {wDig wChg wSpc} $g(scrInf,cfg) {}
+    foreach {wDig wChg wSpc wEm} $g(scrInf,cfg) {}
 
-    # Then establish an X position for plotting EVERY Info element such
+    # Then establish an X position for plotting the PRIMARY Info elements such
     # that the maximal line number (if visible) will FIT to its left
-    set g(scrInf,X) [expr {$opts(showln) ? $wDig*$g(lnumDigits) : 0}]
+    #   Values (mX, tX) for windows (Merge .vs. Text) WILL need to be distinct
+    set g(scrInf,mX) [set g(scrInf,tX) \
+                             [expr {$opts(showln) ? $wDig*$g(lnumDigits) : 0}]]
+
+    # In a 3way Diff situation, make room for a Textwin "ancestral indicator"
+    if {$g(ancfileset)} { incr g(scrInf,tX) $wEm }
 
     # MergeInfo always (for now) adds space for ITS (left/right) markers
     #   (but it COULD be done as a pref, by replacing 'true' with some var)
-    if {[set sz [expr {( true ? $wChg+$wSpc : 0) + $g(scrInf,X)}]]} {
+    if {[set sz [expr {( true ? $wChg+$wSpc : 0) + $g(scrInf,mX)}]]} {
         $w(mergeInfo) configure -width [incr sz 3]
+        incr g(scrInf,mX) ;# 'slides' padding to 1pxl on left and 2pxl right
     }
 
-    # Add to 'X' any space needed for Changebars (if visible) which will
+    # Add to 'tX' any space needed for Changebars (if visible) which will
     # left-justify to that position defined above. Then INCREASE that amount
-    # (for padding) and apply it to BOTH Text Info canvases, calling it
-    # "scrInf,XX" (for plotting), making the canvas EXACTLY(+3pxl) wide enough
-    #   (does NOTHING if meta-data visibility options are BOTH turned off)
-    if {[set sz [expr {($opts(showcbs) ? $wChg+$wSpc : 0) + $g(scrInf,X)}]]} {
-        $w(LeftInfo)  configure -width [incr sz 3]
+    # (+5pxl for padding) and apply it to BOTH Text Info canvases, calling it
+    # "scrInf,XX" (for plotting), making the canvas EXACTLY wide enough
+    #   (does NOTHING if meta-data visibility options are ALL turned off)
+    if {[set sz [expr {($opts(showcbs) ? $wChg+$wSpc : 0) + $g(scrInf,tX)}]]} {
+        $w(LeftInfo)  configure -width [incr sz 5]
         $w(RightInfo) configure -width [set g(scrInf,XX) $sz]
+        incr g(scrInf,tX) 3;# 'slides' padding to 3pxl on left and 2pxl right
     }
-    incr g(scrInf,X) ;# 'slides' the +3 padding to 1pxl on left and 2pxl right
 }
 
 ###############################################################################
@@ -858,13 +952,13 @@ proc plot-merge-info {args} {
 
         # Plot the contributory-side marker (if any)
         if { "$side" != {}} {
-            $w(mergeInfo) create text $g(scrInf,X) $y -anchor nw  \
+            $w(mergeInfo) create text $g(scrInf,mX) $y -anchor nw  \
                     -fill $Fg -font $Fnt -text "$side"
         }
 
         # Plot LineNum if requested
         if {$opts(showln)} {
-            $w(mergeInfo) create text $g(scrInf,X) $y -anchor ne  \
+            $w(mergeInfo) create text $g(scrInf,mX) $y -anchor ne  \
                     -fill $Fg -font $Fnt -text "$Lnum"
         }
         incr Lnum
@@ -880,8 +974,9 @@ proc plot-line-info {side args} {
     global g
 
     # Ignore this routine if we havent gotten far enough into the processing
-    #   -OR- user has turned OFF both LINENUMBERS and CHGBARS
-    if {$g(startPhase) < 2 || ((! $opts(showln)) && (! $opts(showcbs)))} return
+    #   -OR- everything that might have displayed is turned OFF anyway
+    if {$g(startPhase) < 2 \
+    ||   ((!$g(ancfileset)) && (!$opts(showln)) && (!$opts(showcbs)))} return
 
     # Create session-persistent constants for NOW and FUTURE use
     if {! [info exists g(LR,Left)]} {
@@ -898,50 +993,39 @@ proc plot-line-info {side args} {
         #      Import the 'tag' attr table and make it random access
         #      Begin with NO current attr group
         #      Map the index of the 'current diff' to refer to g(DIFF)
+        #      Presume default first attr-group is a NON hunk-line
         $w(${side}Info) delete all
         array set attr $g(scrInf,tags)
         set aGRP {}
         set gPos [hunk-ndx [hunk-id $g(pos)] DIFF]
+        set aNewGRP "t"
 
         # Begin at 1st VISIBLE screen text line, converting its indice->integer
         set Lnum [expr {int([$w(${side}Text) index @0,0])}]
 
-        # Now, (if >1 entry) binary-search for the APPROPRIATE start "scrInf,*"
-        # entry (to allow mapping 'Lnum' BACK to its ORIGINAL linenumber).
-        # We want the CLOSEST entry BELOW the target screen linenumber 'Lnum'.
-        #   (yet Note: there are simple cases (<2 entries) to handle first)
+        # Now, (if >1 exists) binary-search for an APPROPRIATE start "scrInf,*"
+        # entry to allow mapping 'Lnum' BACK to its ORIGINAL linenumber. We
+        # want the CLOSEST item (preferrably ABOVE) the target Lnum value, but
+        # BELOW is used when Lnum > last line of the final hunk. When NONE
+        # exist (files are identical), the screen numbers ARE the real numbers,
+        # so a dummy entry allows the remaining code to function properly.
+        if {[set i $g(COUNT)]} {
+            # N.B> 'rngeSrch' (unlike hunk-id, et.al) uses ZERO-based indices
+            #   so increment the index UNLESS it comes back as the last entry
+            if {[set i [rngeSrch DIFF $Lnum "scrInf,"]] != $g(COUNT)} {incr i}
+            foreach $g(LR,$side) \
+                            $g(scrInf,[set hID [hunk-id $i DIFF]]) {break}
+        } else {foreach $g(LR,$side)    { 0 0 0 0 "" 0 0 "" }      {break} }
 
-        set cur 0   ;# Track i'th hunk mapping entry "cur"rently read-in
-        if {[set i [set HI $g(COUNT)]] > [set LO 1]} {
-            foreach $g(LR,$side) $g(scrInf,[hunk-id [set cur $i] DIFF]) {break}
-
-            if {$Lnum < $Snum} {
-                foreach $g(LR,$side) \
-                          $g(scrInf,[hunk-id [set cur [set i 1]] DIFF]) {break}
-
-                if {$Lnum >= $Snum} {
-                    for {set i [expr {($LO + $HI) / 2}]} {$i >= $LO} \
-                            {set i [expr {($LO + $HI) / 2}]} {
-
-                        foreach $g(LR,$side) \
-                                $g(scrInf,[hunk-id [set cur $i] DIFF]) {break}
-
-                        if {$Snum > $Lnum} \
-                        { set HI [expr {$i-1}] } else { set LO [expr {$i+1}] }
-                    }
-                }
-            }
+        # When a 3way is active, it REQUIRES a per-line 'ancestral' mapping
+        #   (so figure out where to START that mapping as well)
+        if {$g(ancfileset)} {
+            set anc(max) [llength $g(d3$side)]
+            set anc(ndx) [rngeSrch d3$side [expr {$Lnum - $Ofst}]]
+            foreach {anc(fst) anc(lst) anc(mrk)}               \
+                [expr {$anc(ndx) < $anc(max)   ?               \
+                [lindex $g(d3$side) $anc(ndx)] : {0 0 " "} }]    { }
         }
-
-        # Establish the (found?) i'th mapping entry to begin processing
-        #   (but dont bother if it is ALREADY currently loaded)
-        # -OR- simply provide fake values (when number of diffs was zero)
-        if {$i} {
-            if {$i != $cur} {
-                foreach $g(LR,$side) $g(scrInf,[hunk-id $i DIFF])  {break}
-            }
-        } else {foreach $g(LR,$side)  { 0 0 0 0 "" 0 0 "" }   {break} }
-        set aNewGRP "t" ;# Presume default first attr-group is a NON hunk-line
 
         # Map/plot Lnums, advancing as needed through any mapping entries.
         # Line number translation consists of USING variables already set but
@@ -962,8 +1046,9 @@ proc plot-line-info {side args} {
                         if {$i < $g(count)} {
                             # Step forward to the next hunk mapping
                             #   loading the NEXT scrInf,* entry settings
-                            foreach $g(LR,$side) \
-                                    $g(scrInf,[hunk-id [incr i] DIFF]) {break}
+                            set hID [hunk-id [incr i] DIFF]
+                            foreach $g(LR,$side) $g(scrInf,$hID) {break}
+                            if {[info exists g(overlap$hID)]} {set Cbar "?"}
                             # Restart loop if 'Lnum' is NOW INSIDE the params
                             # of the newly read-in hunk (to support abutted
                             # hunks created by the Split/Combine feature)
@@ -1005,11 +1090,11 @@ proc plot-line-info {side args} {
 
                     # Make/plot a fontsized ChangeBar "background rect"
                     set yy $Hgt
-                    set Dims [list $g(scrInf,X) $y $g(scrInf,XX) [incr yy $y]]
+                    set Dims [list $g(scrInf,tX) $y $g(scrInf,XX) [incr yy $y]]
                     $w(${side}Info) create rect $Dims -fill $Cbg -outline $Cbg
                 } else  { set Cfg $Fg }
 
-                $w(${side}Info) create text $g(scrInf,X) $y -anchor nw \
+                $w(${side}Info) create text $g(scrInf,tX) $y -anchor nw \
                     -fill $Cfg -font $Fnt -text " $Cbar"
             }
 
@@ -1018,13 +1103,29 @@ proc plot-line-info {side args} {
                 if {$opts(tagln)} {
                     # Make/plot a fontsized Lnum "background rect"
                     set yy $Hgt
-                    set Dims [list $g(scrInf,X) $y 1 [incr yy $y]]
+                    set Dims [list $g(scrInf,tX) $y 1 [incr yy $y]]
                     $w(${side}Info) create rect $Dims -fill $Bg -outline $Bg
                 }
 
-                $w(${side}Info) create text $g(scrInf,X) $y -anchor ne  \
+                $w(${side}Info) create text $g(scrInf,tX) $y -anchor ne  \
                     -fill $Fg -font $Fnt -text "[expr {$Lnum - $Ofst}]"
             }
+
+            # Inserts the 'ancestral' marker if a 3way is in progress
+            #   (and we haven't walked off the list of markers altogether)
+            if {$g(ancfileset) && $anc(ndx) < $anc(max) \
+            &&  ($Lnum - $Ofst) >= $anc(fst) && ($Lnum - $Ofst) <= $anc(lst)} {
+
+                $w(${side}Info) create text 1 $y -anchor nw  \
+                                          -fill $Fg -font $Fnt -text $anc(mrk)
+
+                # Step map forward to next triplet (when 'last' has been used)
+                if {$anc(lst) == $Lnum - $Ofst} {
+                    foreach {anc(fst) anc(lst) anc(mrk)}  \
+                                    [lindex $g(d3$side) [incr anc(ndx)]] { }
+                }
+            }
+
             incr Lnum
         }
     }
@@ -1206,7 +1307,7 @@ proc get-file-rev {fn ndx {r ""} {Scm {}}} {
         #   (There is not necessarily a RCS directory for RCS, either...)
         #   (however, if not, then the file will ALWAYS have a ,v suffix.)
         set finfo(lbl,$ndx) "$fn (CVS $rev)"
-        set finfo(tmp,$ndx) "exec $cmd update -p $cvsopt \"$fn\""
+        set finfo(tmp,$ndx) "$cmd update -p $cvsopt \"$fn\""
 
         }
     SVN {
@@ -1217,10 +1318,10 @@ proc get-file-rev {fn ndx {r ""} {Scm {}}} {
             if {![regsub {^.*@} $fn {} rev]} { set rev "HEAD" }
             regsub {@\d+$} $fn {} path
             if {"$rev" == ""} {
-                set finfo(tmp,$ndx) "exec $cmd cat $path"
+                set finfo(tmp,$ndx) "$cmd cat $path"
                 set finfo(lbl,$ndx) "$fn (SVN)"
             } else {
-                set finfo(tmp,$ndx) "exec $cmd cat -r $rev $path"
+                set finfo(tmp,$ndx) "$cmd cat -r $rev $path"
                 set finfo(lbl,$ndx) "$fn (SVN $rev)"
             }
         } else {
@@ -1229,7 +1330,7 @@ proc get-file-rev {fn ndx {r ""} {Scm {}}} {
             } else {
                 set finfo(lbl,$ndx) "$fn (SVN $rev)"
             }
-            set finfo(tmp,$ndx) "exec $cmd cat $svnopt \"$fn\""
+            set finfo(tmp,$ndx) "$cmd cat $svnopt \"$fn\""
         }
 
         }
@@ -1241,44 +1342,44 @@ proc get-file-rev {fn ndx {r ""} {Scm {}}} {
             set prefix [exec $cmd rev-parse --show-prefix]
             if {"$r" == "" || " " == [string index "$r" 0]} {
                 set finfo(lbl,$ndx) "$fn (GIT--staged)" ;# STAGEd vrsn
-                set finfo(tmp,$ndx) "exec $cmd show \":$prefix$fn\""
+                set finfo(tmp,$ndx) "$cmd show \":$prefix$fn\""
             } else {
                 set finfo(lbl,$ndx) "$fn (GIT $rev)" ;# REQSTd vrsn
-                set finfo(tmp,$ndx) "exec $cmd show \"$gitopt$prefix$fn\""
+                set finfo(tmp,$ndx) "$cmd show \"$gitopt$prefix$fn\""
             }
         } {set msg "Please re-start from within a Git work tree."}
         }
     BK {
         append cmd "bk" $cmdsfx
         set finfo(lbl,$ndx) "$fn (Bitkeeper $rev)"
-        set finfo(tmp,$ndx) "exec $cmd get -p $bkopt \"$fn\""
+        set finfo(tmp,$ndx) "$cmd get -p $bkopt \"$fn\""
 
         }
     SCCS {
         append cmd "sccs" $cmdsfx
         set finfo(lbl,$ndx) "$fn (SCCS $rev)"
-        set finfo(tmp,$ndx) "exec $cmd get -p $sccsopt \"$fn\""
+        set finfo(tmp,$ndx) "$cmd get -p $sccsopt \"$fn\""
         }
     RCS {
         append cmd "co" $cmdsfx
         set finfo(lbl,$ndx) "$fn (RCS $rev)"
-        set finfo(tmp,$ndx) "exec $cmd -p$rcsopt \"$fn\""
+        set finfo(tmp,$ndx) "$cmd -p$rcsopt \"$fn\""
         }
     PVCS {
         append cmd "get" $cmdsfx
         set finfo(lbl,$ndx) "$fn (PVCS $rev)"
-        set finfo(tmp,$ndx) "exec $cmd -p $pvcsopt \"$fn\""
+        set finfo(tmp,$ndx) "$cmd -p $pvcsopt \"$fn\""
         set finfo(pproc,$ndx) "filterCRCRLF"
         }
     Perforce {
         append cmd "p4" $cmdsfx
         set finfo(lbl,$ndx) "$fn (Perforce $rev)"
-        set finfo(tmp,$ndx) "exec $cmd print -q \"$p4file\""
+        set finfo(tmp,$ndx) "$cmd print -q \"$p4file\""
         }
     Accurev {
         append cmd "accurev" $cmdsfx
         set finfo(lbl,$ndx) "$fn (Accurev $rev)"
-        set finfo(tmp,$ndx) "exec $cmd cat $acopt \"$fn\""
+        set finfo(tmp,$ndx) "$cmd cat $acopt \"$fn\""
         }
     ClearCase {
         # is this NOT a Windows tool (why no append of .exe?)
@@ -1331,10 +1432,10 @@ proc get-file-rev {fn ndx {r ""} {Scm {}}} {
             # in hg, the revision for cat defaults to the parent revision
             # of the working directory
             set finfo(lbl,$ndx) "$fn (HG PARENT)"
-            set finfo(tmp,$ndx) "exec $cmd cat $fn"
+            set finfo(tmp,$ndx) "$cmd cat $fn"
         } else {
             set finfo(lbl,$ndx) "$fn (HG $rev)"
-            set finfo(tmp,$ndx) "exec $cmd cat $hgopt $fn"
+            set finfo(tmp,$ndx) "$cmd cat $hgopt $fn"
         }
 
         }
@@ -1344,7 +1445,9 @@ proc get-file-rev {fn ndx {r ""} {Scm {}}} {
     # If NO errs (and in 1st pairing) NOW is the time to actually GET the file
     if {$msg == ""} {
         if {$ndx <= 2 && [string length $finfo(tmp,$ndx)]} {
+            watch-cursor "Accessing $finfo(lbl,$ndx)"
             set msg [scm-chkget $ndx]
+            restore-cursor
         }
     }
 
@@ -1865,7 +1968,7 @@ proc inquire-git {revs msgRet} {
     }
 
     # Ask Git which files ACTUALLY differ between the given endpoint(s)
-    set result [run-command "exec git diff --name-only $cmit(1) $cmit(2)"]
+    set result [run-command "git diff --name-only $cmit(1) $cmit(2)"]
     set gitOUT [lindex $result 0]
     set gitERR [lindex $result 1]
     set gitRC [lindex $result 2]
@@ -1891,11 +1994,12 @@ proc inquire-git {revs msgRet} {
                 # is a "local-machine" access method (no latency) so doing
                 # them ALL right now should not be a burden.
                 #   If that proves wrong, THIS is where to fix it.
-                set finfo(pth,$ndx) [tmpfile "tkdiff__[file tail $file]"]
+                set finfo(pth,$ndx) [tmpfile "tkd__[file tail $file]"]
                 set finfo(tmp,$ndx) ""
-                set cmd "exec git show $rev($i):$file > $finfo(pth,$ndx)"
+                set cmd "git show $rev($i):$file"
 
-                if {[lindex [set result [run-command $cmd]] 2]} {
+                set result [run-command $cmd $finfo(pth,$ndx)]
+                if {[lindex $result 2]} {
                     set gitERR [lindex $result 1]
                     if [string match "*exists on disk*" $gitERR] {
                         #   (the file simply is not *from* the requested 'rev')
@@ -1940,6 +2044,9 @@ proc inquire-svn {revs msgRet} {
     # cmit is how we express the range to 'svn diff'
     set cmit(2) [set rev(2) ""]
 
+    # This could take some time, so let user know we are busy
+    watch-cursor "Inquiring of SVN for files..."
+
     if {$revs == 0} {
         # Sets up       BASE     ->   WC
         set cmit(1) [set rev(1) "BASE"]
@@ -1955,10 +2062,9 @@ proc inquire-svn {revs msgRet} {
     # Ask Svn which items got committed between the given endpoint(s)
     #   do we need/want "--depth files" ???
     # N.B> this might get messy with URL/PEG/date notations!!!
-    set result [run-command "exec svn diff --summarize -r $cmit(1)$cmit(2)"]
+    set result [run-command "svn diff --summarize -r $cmit(1)$cmit(2)"]
     set svnOUT [lindex $result 0]
-    set svnRC [lindex $result 2]
-    if {$svnRC != 0 || $svnOUT == ""} {
+    if {[set svnRC [lindex $result 2]] || $svnOUT == ""} {
         set svnERR [lindex $result 1]
         if {$svnRC == 0} {
             set MSG "Svn diff shows NO output using rev: $cmit(1)$cmit(2)"
@@ -1967,7 +2073,8 @@ proc inquire-svn {revs msgRet} {
     }
 
     # Expected output form should look like lines of:
-    # "flgs     filename"
+    #           "flgs     filename"
+    # (indices)  0-------78--------->
     #
     #  where flgs can be:
     #      D    -deleted
@@ -1977,7 +2084,7 @@ proc inquire-svn {revs msgRet} {
     # Do we need to pass an EMPTY file if the flag shows up as 'D' or 'A' ??
     set ndx 0
     foreach ln [split $svnOUT "\n"] {
-        set file [string range $ln 8 end]
+        if {"" == [string trim [set file [string range $ln 8 end]]]} {continue}
         foreach i {1 2} {
             incr ndx
             if {"" != $rev($i)} {
@@ -1991,6 +2098,7 @@ proc inquire-svn {revs msgRet} {
             }
         }
     }
+    restore-cursor
     return $ndx
 }
 
@@ -2010,20 +2118,19 @@ proc create-display {} {
     # client  - the area with the text widgets and the graphical map
     # status us         - a bottom status line
 
-    # this block of destroys is only for stand-alone testing of
-    # the GUI code, and can be blown away (or not, if we want to
-    # be able to call this routine to recreate the display...)
+    # this block of destroys is MOSTLY for stand-alone testing of the GUI code,
+    # and could be blown away (except for .status), or not, if we want to
+    # be able to call this routine to recreate the display...
     catch {
+        destroy .status ;# Keep this as first (it MIGHT exist when others dont)
         destroy .menubar
         destroy .toolbar
         destroy .client
         destroy .map
-        destroy .status
         destroy .merge
     }
 
-    # create the top level frames/windows and store them in a global
-    # array..
+    # 'identify' the top level frames/windows and store them in a global array
     set w(client) .client
     set w(menubar) .menubar
     set w(toolbar) .toolbar
@@ -2701,7 +2808,7 @@ proc find-inline-diff-ratcliff {hID pairID s1 s2} {
     global g
 
     if {![set len1 [string length $s1]] || ![set len2 [string length $s2]] } {
-    return 0
+        return 0
     }
     return [fid-ratcliff-aux $hID $pairID $s1 0 $len1 $s2 0 $len2]
 }
@@ -3245,7 +3352,7 @@ proc reload-multifile {pairs} {
     set i 0
     while {[incr i] <= $pairs} {
         $w(multiFileMenu) add radiobutton -value $i -variable finfo(fCurpair) \
-            -label $finfo(lbl,[expr {$i * 2 - 1}]) -accelerator $i \
+            -label $finfo(lbl,[expr {$i * 2 - 1}]) \
             -command [list multiFileMenu jump $i]
     }
 }
@@ -4571,14 +4678,14 @@ proc apply {} {
     # issues - thus avoiding the "excess" work alluded to above.
     #
     #   (N.B.: when the startup coding invokes 'apply', it does so by COPYING
-    #   'opts' into 'tmpopts' first - as such, no transition can NEVER exist.)
+    #   'opts' into 'tmpopts' first - as such, transitions will NEVER exist.)
 
     # First we need an 'inversion' primitive to access meta-state values ...
     set OTHER(showinline1) showinline2
     set OTHER(showinline2) showinline1
 
     # ... next, preloading of the keys needing their OWN precedence order ...
-    #   (changing of an '...opt' field that IS [and WILL] remain in use)
+    #   (content of an '...opt' field that IS [and WILL] remain in use)
     lappend keys ignoreRegexLnopt ignoreRegexLn ignoreblanksopt ignoreblanks
     #   (switching among inline algorithms, including to ON or OFF)
     lappend keys showinline1 showinline2
@@ -4590,9 +4697,9 @@ proc apply {} {
                   predomMrg showcbs showlineview showln showmap syncscroll \
                   tabstops tagcbs tagln tagtext textopt tmpdir toolbarIcons
 
-    # ... finally, init the flags we need to derived - and then GET TO IT!!
-    set remark 0                     ;# start as: 'remark' will not be run,
-    set inlActn [set redoDiff {}]    ;#  nor will Diff or 'compute-inlines'
+    # ... finally, init the flags we need to derive - and then GET TO IT!!
+    set remark 0                   ;# started as: 'remark' will not be run,
+    set inlActn [set redoDiff {}]  ;#  nor will Diff or 'compute-inlines'
     foreach key $keys {
         if {"$tmpopts($key)" ne "$opts($key)"} {
             # What is transitioning ?
@@ -4896,8 +5003,9 @@ proc create-map {name mapwidth mapheight} {
         switch -- "[append C1 $C2]" {
         "-"  { set color $opts(mapdel) }
         "+"  { set color $opts(mapins) }
-        "!!" { set color $opts(mapchg) }
-        "??" { set color yellow }
+        "!!" { set color [expr {[info exists g(overlap$hID)] ? \
+                         $opts(mapolp) : $opts(mapchg)}]
+             }
         }
 
         $map put $color -to 0 $y $mapwidth [expr {$y + $size}]
@@ -4928,9 +5036,9 @@ proc map-resize {args} {
       -highlightthickness]}]
     set mapheight [expr {[winfo height $w(map)] - $g(mapborder) * 2}]
 
-    # We'll get a couple of "resize" events, so don't draw a map
-    # unless the map size has changed -OR- 
-    # we don't have a map and don't want one, don't make one
+    # We'll get a couple of "resize" events, so DON'T draw a map ...
+    # - unless the map size has changed -OR- 
+    # - we don't have a map and don't want one (so don't make one)
     if {$mapheight == $g(mapheight) \
     || ($g(mapheight) == 0 && $opts(showmap) == 0)} {
         return
@@ -5263,13 +5371,15 @@ proc merge-add-marks {{hIDS {}}} {
                     # Now determine WHERE that prev hunk sits in 'mergeText'
                     # ADDing its CURRENT 'choice' SIZE (how many merge lines
                     # its USING), then add the START location of the NEW
-                    # hunk (using SCREEN numbering is OK because) ....
+                    # hunk (AFTER removing any PADDING of the previous hunk)
+                    # Using SCREEN numbering is OK because by then ....
                     set S [expr {int([$w(mergeText) index mark$prvHid]) \
                                 + [diff-size $prvHid $g(merge$prvHid)]  \
+                                - [lindex $g(scrInf,$prvHid) 2]         \
                                 + [lindex $g(scrInf,$hID) 0] - 1}]
-                    # ... by getting the screen END Lnum of the PRIOR hunk,
+                    # ... getting the screen END Lnum of the PRIOR hunk,
                     set O [lindex $g(scrInf,$prvHid) 1]
-                    # it will convert into the INTERVENING line count
+                    # ... it all converts into the INTERVENING line count
                 } else { foreach {S na na O} $g(scrInf,$hID) {break} }
 
                 # Set the NEW mark (and eventually fall thru to tagging)
@@ -5443,6 +5553,20 @@ proc do-merge-choice {newversion} {
     $w(mergeText) configure -state disabled
     set g(merge$hID) $newversion
 
+    # Must ask user (when this is a collision) if their choice CLEARed it
+    if {[info exists g(overlap$hID)]} {
+        after idle [subst -nocommands {
+                if {{yes} == [tk_messageBox -type yesno -icon question  \
+                -title {Please Confirm} -parent $w(client) -default no  \
+                -message "Did this choice RESOLVE the collision ?" ]}   \
+                     { unset g(overlap$hID)
+                       set-tag $hID currtag overlaptag
+                       if {$opts(showmap) || $g(mapheight)} \
+                           {set g(mapheight) -1 ; map-resize}
+                     }
+        }]
+    }
+
     if {$g(showmerge) && $opts(autocenter)} {
         merge-center
     }
@@ -5519,11 +5643,10 @@ proc set-tag {hID newtag {oldtag ""} {setpos 0}} {
         $w(LeftText)  tag remove $oldtag $S.0 $E.0+1lines
         $w(RightText) tag remove $oldtag $S.0 $E.0+1lines
 
-        # N.B> $oldtag is really only ever used for "currtag"
-        # so "difftag" is never seen here (thus no diff(R/L) mapping reqd)
-        catch {
+        # Of tags to remove, only "currtag" makes sense for the Merge window
+        if {"$oldtag" == "currtag"} { catch {
             set lines [diff-size $hID $g(merge$hID)]
-            $w(mergeText) tag remove $oldtag mark$hID "mark$hID+${lines}lines"
+            $w(mergeText) tag remove $oldtag mark$hID "mark$hID+${lines}lines"}
         }
     }
 
@@ -5531,8 +5654,9 @@ proc set-tag {hID newtag {oldtag ""} {setpos 0}} {
     switch -- [append cL $cR] {
     "-"  { set coltag deltag }
     "+"  { set coltag instag }
-    "!!" { set coltag chgtag }
-    "??" { set coltag overlaptag }
+    "!!" { set coltag [expr {[info exists g(overlap$hID)] ? \
+                                             "overlaptag" : "chgtag" }]
+         }
     }
 
     # Add new tag
@@ -5572,8 +5696,7 @@ proc set-tag {hID newtag {oldtag ""} {setpos 0}} {
         }
     }
 
-    # Move the view on both text widgets so that the new region is
-    # visible.
+    # Move the view on both text widgets so that the new region is visible.
     if {$setpos} {
         if {$opts(autocenter)} {
             center
@@ -5682,7 +5805,7 @@ proc move {value {relative 1} {setpos 1}} {
 ###############################################################################
 proc update-display {} {
     global g w opts finfo
-    debug-info "update-display ()"
+    debug-info "update-display () from [info level -1]"
 
     #debug-info "  init_OK $g(initOK)"
     #debug-info "  startPhase $g(startPhase)"
@@ -5966,17 +6089,20 @@ proc wipe {} {
     debug-info "wipe ()"
     global g
 
+    # Short cicuit useless traces and key indexing lists
+    if {$g(startPhase)} {set g(startPhase) 1}
     set g(pos) 0
     set g(COUNT) [set g(count) 0]
     set g(DIFF)  [set g(diff) ""]
     set g(currdiff) ""
+
     # N.B: It is critical that hID-related datums, particularly those that use
     # their EXISTANCE as the basis for internal decision making, be REMOVED
     # when attempting to "start over" to avoid seemingly random errors.
     array unset g {scrInf,[0-9]*}
     array unset g {overlap[0-9]*}
     array unset g {merge[0-9]*}
-    array unset g {diff3[rl]*}
+    array unset g {d3[RL]*}
     array unset g {inline,*}
 }
 
@@ -6015,6 +6141,99 @@ proc wipe-window {} {
     buttons disabled
 
     diffmark clearall
+}
+
+###############################################################################
+# Search an ascending sorted list of lower/upper bound pairs for a given value.
+#  [**> LIST MUST EXIST AS A NAMED ARRAY ELEMENT OF THE GLOBAL ('g') SPACE <**]
+#
+# Returns the index that either CONTAINS it, or FOLLOWS it; -OR-
+# the original list LENGTH (i.e. an invalid index), indicating 'Exceeds range'
+#
+#   N.B> as long as the bounds info is in the 1st two elements of the item
+#        being searched, additional fields may be stored in the same 'record'.
+###############################################################################
+proc rngeSrch {rnge val {indirect {}}} {
+    global g
+
+    # Until TcL V8.(6?).? arrives, there is NO "lsearch -bisect -command"
+    #   (so this code is our own customized 'tuple binary-search' instead)
+
+    # If 'rnge' contains (what amounts to) array INDICES to yet ANOTHER
+    # table of values, then 'indirect' can be used to specify the PREFIX
+    # name of where to indirectly access those ACTUAL range values
+    if {$indirect != {}} {
+        set ithItem {$g($indirect[lindex $g($rnge) $i])}
+    }  {set ithItem          {[lindex $g($rnge) $i]} }
+
+    # Dont bother if 'rnge' is empty or 'val' exceeds its largest value
+    set max [llength $g($rnge)]
+    if {([set HI [set i [incr max -1]]] >= [set LO 0])    \
+    &&             ($val <= [lindex [subst $ithItem] 1])} {
+
+        # Pick the FIRST midpoint and extract its values
+        set i [expr {($LO + $HI)/2}]
+        foreach {low hgh} [lindex [subst $ithItem]]    {break}
+
+        # Repetitively narrow the boundaries until we find it
+        #   N.B> (extra expression ENSURES boundary ALWAYS moves)
+        while {$HI > $LO} {
+            if {$val > $hgh} {set LO [expr {$LO==$i ? $i+1 : $i}]} {
+            if {$val < $low} {set HI [expr {$HI==$i ? $i-1 : $i}]} {
+            break}} ;# Wow - a lucky HIT - stop NOW!!
+
+            # Pick NEW midpoint and try again
+            set i [expr {($LO + $HI)/2}]
+            foreach {low hgh} [lindex [subst $ithItem]]    {break}
+        }
+    } else {return [incr max]}
+    return $i
+}
+
+###############################################################################
+# Specialized range-check machinery to find ancestor collisions (by mark-diffs)
+# Returns a truth value indicative of range S->E intersecting another range
+#
+#   N.B> optional arg is an initially unknown VarName (in callers stackframe)
+#   to permit CHAINED accesses. It avoids searching for the correct 'anc' range
+#   as is done on the FIRST such access by storing its LAST USED 'anc' index
+#   to simply resume from that point (not unlike a co-routine or iterator)
+###############################################################################
+proc chk-ancRnge {anclst S E {prev {}}} {
+    global g
+    if {![set result [llength $g($anclst)]]} {return 0}
+    if {$prev != {}} {upvar $prev  ndx} ;# (Remember where NEXT call starts)
+
+    # Should we skip the 'binary searching' for the ancestor range?
+    if {![info exists ndx]} {
+        # No...but if searching says 'Exceeds known ranges' that IS an answer,
+        # yet needs DECREMENTing (to a valid value) to be CACHEd (if it will)
+        if {$result == [set ndx [rngeSrch $anclst $S]]} {incr ndx -1}
+    } 
+
+    # Get values of first ancestor range to check
+    #   (args S & E are expected to BE in min/max order)
+    foreach {s(0) e(0) result}     "$S $E 0"      {break}
+    foreach {s(1) e(1)} [lindex $g($anclst) $ndx] {break}
+
+    # Check ancestral ranges until found (or is known it CANT be found)
+    while {$s(1) <= $e(0)} {
+        # choose i'th segment as leftmost (and j as other)
+        set i  [expr {$s(0) > $s(1)}]
+        set j  [expr {$i == 0}]
+
+        # Check for overlap
+        if {[set result [expr {$s(0) == $s(1) || $e($i) >= $s($j)}]]} {break}
+
+        # Step to next ancestor range (if one actually exists)
+        if {$ndx < [llength $g($anclst)] - 1} {
+            foreach {s(1) e(1)} [lindex $g($anclst) [incr ndx]] {break}
+        } else {break}
+    }
+    # If result is true, then  $s($j)  and  [min $e($i) $e($j)]
+    # IS the OVERLAP BOUNDS (I think)
+    # (could maybe be sent back as an optional upvar "list" ?)
+    return $result 
 }
 
 ###############################################################################
@@ -6142,26 +6361,34 @@ proc mark-diffs {{rmvrpl {}}} {
         # Otherwise, its a NEW hunk needing to be processed
             foreach {s(1) e(1) s(2) e(2) type} "$result" { }
 
-            if {[string is lower $type ]} { incr g(count) }
+            # Count it ... but only NON-suppressed hunks count as REAL
             incr g(COUNT)
+            if {[string is lower $type]} {
+                incr g(count)
 
-            # Before we ALTER any of those start/end numbers, check for an
-            # active 3way diff and whether this hunk collides changes together.
-            # Also establish its 'default' L/R merge choice (Right over Left)
-            if {$g(ancfileset) && "$type" == "c"} {
-                for {set i $s(2)} {$i <= $e(2)} {incr i} {
-                    if {[info exists g(diff3r$i)]} {
-                        set g(merge$d) 2 ;# Preferred 3way merge choice
-                        for {set j $s(1)} {$j <= $e(1)} {incr j} {
-                            if {[info exists g(diff3l$j)]} {
-                                set g(overlap$d) 1     ;# Collision
-                                break
-                            }
-                        } ;# If already FOUND collision - stop looking
-                        if {[info exists g(overlap$d)]} {break}
-                    } else {set g(merge$d) $opts(predomMrg)} ;#until find '3r'
-                }
-            } else { set g(merge$d) $opts(predomMrg) } ;# when NO 3way at all
+                # In addition, before ALTERING any of those start/end numbers,
+                # check for an active 3way diff and whether this hunk collides
+                # any ancestral changes together. Moreover, also establish its
+                # 'default' L/R merge choice (Ancestral over User preferred)
+                if {$g(ancfileset)} {
+                    set g(merge$d) 0; # begin as temporarily unknown
+                    switch -- $type {
+                    "a" {   if {[chk-ancRnge d3Right $s(2) $e(2) RaNDX]} {
+                                set g(merge$d) 2}
+                        }
+                    "c" {   if {[chk-ancRnge d3Left  $s(1) $e(1) LaNDX]} {
+                                set g(merge$d) 1}
+                            if {[chk-ancRnge d3Right $s(2) $e(2) RaNDX]} {
+                                if {$g(merge$d)} {set g(overlap$d) 1}; # Collision
+                                set g(merge$d) 2};# Right overrides Left
+                        }
+                    "d" {   if {[chk-ancRnge d3Left  $s(1) $e(1) LaNDX]} {
+                                set g(merge$d) 1}
+                        }
+                    }
+                    if {!$g(merge$d)} {set g(merge$d) $opts(predomMrg)}
+                } else { set g(merge$d) $opts(predomMrg) } ;# when NO 3way at all
+            }
 
             # Now REmap s(1),e(1) s(2),e(2) to refer to SCREEN linenumbers
             # First, compute the RAW Left and Right linecounts
@@ -6181,31 +6408,25 @@ proc mark-diffs {{rmvrpl {}}} {
             # virtue of the add/delete) does not actually exist on that side.
             # Uppercase types are hunks to be IGNORED (they get Padded only)
             set pad(1) [set pad(2) 0]
-            set chgbar(1) [set chgbar(2) ""]
+            set cbar(1) [set cbar(2) ""]
             switch -- $type {
             "A" -
             "a" {    ;# an 'add' pads to the LEFT widget
                     set pad([set i 1]) [incr siz(2)]
                     incr s(1) ;# (RAW lnum was the one BEFORE the add)
-                    set chgbar(2) [expr {$type == "a" ? "+" : ""}]
+                    set cbar(2) [expr {$type == "a" ? "+" : ""}]
                 }
             "D" -
             "d" {   ;# a 'delete' pads to the RIGHT widget
                     set pad([set i 2]) [incr siz(1)]
                     incr s(2) ;# (RAW lnum was the one BEFORE the delete)
-                    set chgbar(1) [expr {$type == "d" ? "-" : ""}]
+                    set cbar(1) [expr {$type == "d" ? "-" : ""}]
                 }
             "C" -
             "c" {   ;# a 'change' pads to the SHORTER widget
                     set i [expr {$siz(1) < $siz(2) ? 1 : 2}]
                     set pad($i) [expr {abs([incr siz(1)] - [incr siz(2)])}]
-                    if {[string is lower "$type"]} {
-                        if {[info exists g(overlap$d)]} {
-                            set chgbar(1) [set chgbar(2) "?"] ;# (3way overlap)
-                        } else {
-                            set chgbar(1) [set chgbar(2) "!"] ;#  (just a chg)
-                        }
-                    }
+                    set cbar(2) [set cbar(1) [expr {$type == "c" ? "!" : ""}]]
                 }
             }
 
@@ -6226,7 +6447,7 @@ proc mark-diffs {{rmvrpl {}}} {
             # later on throughout the tool
             #   N.B!!     s(1),e(1) == s(2),e(2)  so only one set is recorded
             set g(scrInf,$d) [list $s(2) $e(2) \
-                $pad(1) $delta(1) $chgbar(1) $pad(2) $delta(2) $chgbar(2) ]
+                $pad(1) $delta(1) $cbar(1) $pad(2) $delta(2) $cbar(2) ]
 
             # Accumulate any newly computed padding for the NEXT iteration
             incr delta($i) $pad($i)
@@ -6290,7 +6511,8 @@ proc mark-diffs {{rmvrpl {}}} {
     # procedure to mark EVERY diff
     if {$g(count)} {merge-add-marks $rmvrpl}
 
-    # Lastly go (re-)TAG it all
+    # Lastly, ensure the MAP reflects the CURRENT diffs and go (re-)TAG it all
+    map-resize
     remark-diffs
     return $g(count)
 }
@@ -6303,17 +6525,11 @@ proc do-new-diff {} {
     global g
     global finfo
 
-    #foreach inf [lsort [array names finfo]] \
-        { debug-info "    $inf: $finfo($inf)" }
-
     # Unlock the PRESENT mergefile settings (but leave name for now), then ...
     # Pop up the dialog to collect the args and form them together
     # into a command - bailing out if Dialog cancels or args is malformed
     set g(mergefileset) 0
     if {![newDiffDialog] || ![assemble-args]} return
-
-    #foreach inf [lsort [array names finfo]] \
-        { debug-info "    $inf: $finfo($inf)" }
 
     set g(disableSyncing) 1 ;# turn off syncing until things settle down
 
@@ -6459,11 +6675,11 @@ proc remark-inline {hID {reCfgSkew true}} {
     #
     #      (Diff output can be quite capricious at times!!)
     if {[info exists g(inline,$hID)]} {
-    set wdg(l) "LeftText"
-    set wdg(r) "RightText"
+        set wdg(l) "LeftText"
+        set wdg(r) "RightText"
 
-    # Presumes 'inlinetag' was ALREADY removed from BOTH Text widgets
-    foreach {Lno} $g(scrInf,$hID) {break}
+        # Presumes 'inlinetag' was ALREADY removed from BOTH Text widgets
+        foreach {Lno} $g(scrInf,$hID) {break}
         foreach {side lndx Scol Ecol} $g(inline,$hID) {
             add-tag $w($wdg($side)) inlinetag [incr lndx $Lno] $Scol $Ecol
         }
@@ -6485,10 +6701,10 @@ proc show-status {message} {
 ###############################################################################
 # Trace output, enabled by a global variable
 ###############################################################################
-proc debug-info {message} {
+proc debug-info {message {force 0}} {
     global g
 
-    if {$g(debug)} {
+    if {$g(debug) || $force} {
         puts "$message"
     }
 }
@@ -6559,7 +6775,7 @@ proc rediff {} {
     }
     show-status "Executing \"$diffcmd\""
 
-    set result [run-command "exec $diffcmd"]
+    set result [run-command "$diffcmd"]
     set stdout [lindex $result 0]
     set stderr [lindex $result 1]
     set exitcode [lindex $result 2]
@@ -6651,71 +6867,41 @@ proc rediff {} {
     debug-info "DIFF([llength $g(DIFF)]) .vs. diff([llength $g(diff)])"
 
     if {$g(ancfileset)} {
+        foreach {LR NDX} [list Left $i Right $j] {
 
-        # 3-way merge - compare 1st file (left: diff3l) with ancestor
-        if {$opts(ignoreblanks) == 1} {
-            set diffcmd "$opts(diffcmd) $opts(ignoreblanksopt) \
-              {$finfo(pth,$i)} {$g(ancfile)}"
-        } else {
-            set diffcmd "$opts(diffcmd) {$finfo(pth,$i)} {$g(ancfile)}"
-        }
-        show-status "Executing \"$diffcmd\""
-        set result [run-command "exec $diffcmd"]
-        set stdout [lindex $result 0]
-        set stderr [lindex $result 1]
-        set exitcode [lindex $result 2]
-        if {$exitcode < 0 || $exitcode > 1 || $stderr != ""} {
-            fatal-error "diff3 failed:\n$stderr"
-        }
-        set lines [split $stdout "\n"]
-        set g(diff3l) {}
-        foreach line $lines {
-            if {[string match {[0-9]*} $line]} {
-                if {[regexp {^[0-9]*,} $line match]} {
-                    regexp {([0-9]*),([0-9]*).*} $line matchvar s1 s2
-                } else {
-                    regexp {([0-9]*).*} $line matchvar s1
-                    set s2 $s1
-                }
+            # 3-way merge - compare file  with ancestor
+            #  N.B> note we are diffing TO (not from) the Ancestor
+            #       This effectively flips 'a/d' hunk type designators 
+            set diffcmd "$opts(diffcmd)"
+            if {$opts(ignoreblanks) == 1} {
+                 lappend diffcmd $opts(ignoreblanksopt)
+            } 
+            append diffcmd " {$finfo(pth,$NDX)} {$g(ancfile)}"
 
-                lappend g(diff3l) $s1
-                for {set i $s1} {$i <= $s2} {incr i} {
-                    set g(diff3l$i) 1
+            show-status "Executing \"$diffcmd\""
+            set result [run-command "$diffcmd"]
+            set stdout [lindex $result 0]
+            set stderr [lindex $result 1]
+            set exitcode [lindex $result 2]
+            if {$exitcode < 0 || $exitcode > 1 || $stderr != ""} {
+                fatal-error "diff3 failed:\n$stderr"
+            }
+            set lines [split $stdout "\n"]
+            set g(d3$LR) {}
+            foreach line $lines {
+                if {[string match {[0-9]*} $line]} {
+                    foreach {s1 e1 s2 e2 type} [extract $line] {
+                        # Ignore any DELETIONS by this side FROM the Ancestor
+                        # (they exist only at the ancestors level and earlier)
+                        if {$type == "a"} {break} ;# (but they LOOK like adds)
+
+                        # 'mapping' is because we diffed to (not from) ancestor
+                        #  (but we want the user seeing a more normalized view)
+                        lappend g(d3$LR) "$s1 $e1 [string map {c C d A} $type]"
+                    }
                 }
             }
-        }
-
-        # 3-way merge - compare 2nd file (right: diff3r) with ancestor
-        if {$opts(ignoreblanks) == 1} {
-            set diffcmd "$opts(diffcmd) $opts(ignoreblanksopt) \
-              {$finfo(pth,$j)} {$g(ancfile)}"
-        } else {
-            set diffcmd "$opts(diffcmd) {$finfo(pth,$j)} {$g(ancfile)}"
-        }
-        show-status "Executing \"$diffcmd\""
-        set result [run-command "exec $diffcmd"]
-        set stdout [lindex $result 0]
-        set stderr [lindex $result 1]
-        set exitcode [lindex $result 2]
-        if {$exitcode < 0 || $exitcode > 1 || $stderr != ""} {
-            fatal-error "diff3 failed:\n$stderr"
-        }
-        set lines [split $stdout "\n"]
-        set g(diff3r) {}
-        foreach line $lines {
-            if {[string match {[0-9]*} $line]} {
-                if {[regexp {^[0-9]*,} $line match]} {
-                    regexp {([0-9]*),([0-9]*).*} $line matchvar s1 s2
-                } else {
-                    regexp {([0-9]*).*} $line matchvar s1
-                    set s2 $s1
-                }
-
-                lappend g(diff3r) $s1
-                for {set i $s1} {$i <= $s2} {incr i} {
-                    set g(diff3r$i) 1
-                }
-            }
+            debug-info "$LR  ancestral data $g(d3$LR)"
         }
     }
 
@@ -6734,33 +6920,98 @@ proc rediff {} {
 
 ###############################################################################
 # Set the X cursor to "watch" for a window and all of its descendants.
+#
+# An optional msg 'WHY' will post to the status area (when BOTH exist); if the
+# '.status' window DOESN'T exist yet, one **MAY** be temporarily built, and the
+# reason posted there, PROVIDED it takes longer than a specifiable delay(in ms)
+# to REACH the code that can cancel the need (ie- the message is only IMPORTANT
+# if the GUI isn't inplace yet AND the action we elected to be BUSY about takes
+# randomly longer than someone can withstand waiting for feedback:
+#   Prime example:  hung networks or simply unpredictable latency.
 ###############################################################################
-proc watch-cursor {args} {
-    #debug-info "watch-cursor ($args)"
-    global current
-    global w
+proc watch-cursor {{WHY {}} {delay 1250}} {
+    #debug-info "watch-cursor ($msg)"
+    global w ASYNc
 
-    . configure -cursor watch
-    $w(LeftText) configure -cursor watch
-    $w(RightText) configure -cursor watch
-    $w(combo) configure -cursor watch
+    # Cant 'busy' out windows that arent't there yet ...
+    if {[winfo exists w(LeftText)]} {
+        . configure -cursor watch
+        $w(LeftText) configure -cursor watch
+        $w(RightText) configure -cursor watch
+        $w(combo) configure -cursor watch
+        if {$WHY != {}} {show-status "$WHY"}
+        update idletasks
+
+    # ... but if we gave a REASON WHY - someone should see THAT reasonably soon
+    } elseif {$WHY != {}} {
+        # Thus we want to REQUEST a status window be built after a short delay;
+        #   HOWEVER if we can complete the "busy" task and get back in time to
+        # CANCEL the request, the user need NEVER see it -BUT- that means
+        # changing to ASYNC processing for any external tasks we might spawn or
+        # we will NEVER see the timer fire (it needs an event loop running).
+        #   This temp Status window IS removed @pgm exit (on failures), OR as
+        # soon as we replace it with the main GUI (eg. success). Once built,
+        # future Busy/Unbusy pairs simply USE whatever status window exists.
+        if {![winfo exists .status]} {
+            #   So post the timer, SAVING its ID in a global whose EXISTENCE
+            # will be used as a flag, so 'run-command' operates in ASYNC mode.
+            # (N.B> but only the first one to get here can actually post)
+            if {![info exists ASYNc(trigger)]} {
+                set ASYNc(trigger) [after $delay need-status]
+                debug-info "Posted ASYNc(trigger)($ASYNc(trigger))"
+            }
+        }
+        show-status "$WHY"
+        update idletasks
+    }
+}
+
+###############################################################################
+# Give the user SOMETHING to look at while they wait 
+#
+# N.B> if processing hangs, clicking the window 'exit' decoration will kill pgm
+###############################################################################
+proc need-status {} {
+    global g w    
+
+    debug-info "need-status fired"
+    set w(status) .status
+    build-status
+    set W  [winfo pixels .status "3.5i"]
+    set Ofst [winfo pixels .status "1i"]
+    wm manage   $w(status)
+    wm title    $w(status) "$g(name) Status"
+    wm geometry $w(status) "${W}x30+$Ofst+$Ofst"
+    wm protocol $w(status) WM_DELETE_WINDOW {do-exit}
+    # N.B> Protocol works 'IFF' an event loop is RUNNING (to see the msg event)
     update idletasks
 }
 
 ###############################################################################
 # Restore the X cursor for a window and all of its descendants.
 ###############################################################################
-proc restore-cursor {args} {
-    #debug-info "restore-cursor ($args)"
-    global current
-    global w
+proc restore-cursor {} {
+    #debug-info "restore-cursor"
+    global w ASYNc
 
-    . configure -cursor {}
-    $w(LeftText) configure -cursor {}
-    $w(RightText) configure -cursor {}
-    $w(combo) configure -cursor {}
-    show-status ""
-    update idletasks
+    if {[winfo exists w(LeftText)]} {
+        . configure -cursor {}
+        $w(LeftText) configure -cursor {}
+        $w(RightText) configure -cursor {}
+        $w(combo) configure -cursor {}
+        show-status ""
+        update idletasks
+    } elseif {[info exists ASYNc(trigger)]} {
+        if {$ASYNc(trigger) != {}} {
+            # if got here in time ... cancel this attempt and reset to normal
+            # but if we get here LATE, maintain ASYNC mode until its removed
+            if {![winfo exists .status]} {
+                after cancel $ASYNc(trigger)
+                debug-info "Canceled ASYNc(trigger)($ASYNc(trigger))"
+                unset ASYNc(trigger)
+            } else {set ASYNc(trigger) {}}
+        }
+    }
 }
 
 ###############################################################################
@@ -6805,17 +7056,14 @@ proc do-diff {} {
     update idletasks
     set result [catch {
         if {$g(mapheight)} {
-            ## FIXME this could better a catch
+            ## ?? Not sure why THIS needs to be caught ...
+            #   (when 'g(mapheight)' is non-zero, 'map' should exist)
             catch {$map blank}
+            set g(mapheight) -1 ;# once its ON, keep it updated because
+            # toggling it to show only (un)maps the widget itself
         }
 
         rediff
-
-        # If a map exists, recreate it
-        if {$opts(showmap)} {
-            set g(mapheight) -1
-            map-resize
-        }
 
     } output]
 
@@ -6863,7 +7111,7 @@ proc hunk-ndx { id {lst diff}} {
 ###############################################################################
 proc main {} {
     # debug-info "main" - No point... only works AFTER "commandline" runs
-    global g w opts
+    global g w opts ASYNc
     global errorInfo
     global startupError
     global tk_version
@@ -6928,10 +7176,15 @@ proc main {} {
         if {![assemble-args]} {fatal-error "$g(name): Aborted"}
     } elseif {![info exists ::waitvar] || !$::waitvar} {do-exit}
 
-    # Startup phases:
-    #   0  : Bare metal, looking for viable cmd args
-    #   1  : Transitioning to GUI mode and/or major datastruct upheavals
-    #   2  : Operational mode
+    # The ONLY WAY this exists is if 'assemble-args' was forced
+    # to warn about delayed SCM access time - get rid of it
+    #   (and any lingering ASYNC processing condition)
+    if {[info exists w(status)]} {
+        wm forget $w(status)
+        unset -nocomplain ASYNc(trigger)
+        debug-info "ASYNC mode has been dropped"
+    }
+
     set g(startPhase) 1
 
     create-display
@@ -7096,7 +7349,7 @@ proc newDiffDialog {} {
 
         wm protocol $w(newDiffPopup) WM_DELETE_WINDOW { \
             if {! [winfo exists .client]} do-exit
-            wm withdraw $w(newDiffPopup)}
+            wm withdraw $w(newDiffPopup)              }
         wm withdraw $w(newDiffPopup)
 
         set simple [frame $w(newDiffPopup).simple -borderwidth 2 -relief groove]
@@ -7645,6 +7898,8 @@ proc splcmb-Dialog {Combine} {
     set g(pos) [min $minpos $g(pos)]
 
     # Remove and Replace the designated HIDs
+    #   (but ensure the MAP is adjusted to the new regions)
+    if {$opts(showmap) || $g(mapheight)} {set g(mapheight) -1}
     mark-diffs $rnge
     update-display
 }
@@ -7915,10 +8170,7 @@ proc splcmb-chk {what {pos 0}} {
 # all the code to handle the report writing dialog.
 ###############################################################################
 proc write-report {command args} {
-    global g
-    global w
-    global report
-    global finfo
+    global g w opts report finfo
 
     set w(reportPopup) .reportPopup
     switch -- $command {
@@ -7960,51 +8212,71 @@ proc write-report {command args} {
             # probably ought to catch this, in case it fails. Maybe later...
             set handle [open $report(filename) w]
 
-            puts $handle "$g(name) $g(version) report"
+            puts $handle "$g(name) $g(version) report\n"
 
-            # write the file names
-            if {$report(doSideLeft) == 1 && $report(doSideRight) == 1} {
-                puts $handle "\nFile A: $finfo(lbl,L)\nFile B:  $finfo(lbl,R)\n"
-            } elseif {$report(doSideLeft) == 1} {
-                puts $handle "\nFile: $finfo(lbl,L)"
-            } else {
-                puts $handle "\nFile: $finfo(lbl,R)"
-            }
-
-            puts $handle "number of diffs: $g(count)"
-
-            # Produce some simple statistical data
-            set aCnt [set aTot [set dCnt [set dTot [set cCnt [set cTot 0]]]]]
-            foreach hID $g(diff) {
-                foreach {S E P(1) na cL P(2) na cR} $g(scrInf,$hID) { }
-
-                switch -- "[append cL $cR]" {
-                "+"  { incr aCnt ; incr aTot $P(1) }
-                "-"  { incr dCnt ; incr dTot $P(2) }
-                "??" -
-                "!!" { incr cCnt ; incr cTot [expr {$P(1) - $P(2)}] }
+            # Mention the file name(s) ... BOTH unless exactly one is OFF
+            set not([set not(Right) Left]) Right
+            foreach {side lbl} {Left L Right R} {
+                if {$report(doSide$side) || !$report(doSide$not($side))} {
+                    puts $handle "File $side : \t$finfo(lbl,$lbl)"
                 }
             }
 
+            puts $handle "\nNumber of diffs: $g(count)"
+
+            # Produce some simple statistical data (REAL hunks ONLY)
+            #   ("F" is simply a list of FIELD names to read hunk data into)
+            #
+            # First, initialize and get the counts of various quantities ...
+            lappend F S E P(Left) O(Left) C(Left) P(Right) O(Right) C(Right)
+            foreach $F    { 0 0 0 0 "" 0 0 "" }      { }
+            set aCnt [set dCnt [set cCnt [set modLft 0]]]
+            set aTot [set dTot [set cTot [set modRgt 0]]]
+            foreach hID $g(diff) {
+                foreach $F $g(scrInf,$hID) { }
+
+                switch -- "[append C(Left) $C(Right)]" {
+                "+"  { incr aCnt ; incr aTot $P(Left)  ; incr modRgt $P(Left) }
+                "-"  { incr dCnt ; incr dTot $P(Right) ; incr modLft $P(Right)}
+                "!!" { incr cCnt ; incr cTot [expr {$P(Left) - $P(Right)}]
+                       incr modLft     [expr {$E - $S - $P(Left)  + 1}]
+                       incr modRgt     [expr {$E - $S - $P(Right) + 1}]       }
+                }
+            }
+            set maxlns  [expr {int([$w(LeftText)  index end-1lines])}]
+
+            # ... then compute what we can from them ...
+            set sz(Left)  [expr {$maxlns - $O(Left)  - $P(Left) }]
+            set sz(Right) [expr {$maxlns - $O(Right) - $P(Right)}]
+            set pctLft [expr {double($modLft*100)/double($sz(Left)) }]
+            set pctRgt [expr {double($modRgt*100)/double($sz(Right))}]
+
+            # ... and report our findings
             set msg "%6d regions were %s: %d(net) modified lines"
             puts $handle [format "    $msg" $dCnt "deleted" $dTot]
             puts $handle [format "    $msg" $aCnt " added " $aTot]
             puts $handle [format "    $msg" $cCnt "changed" $cTot]
+            puts -nonewline $handle "\n"
+            set msg "%6d %s lines were affected: %4.2g %% of %6d"
+            puts $handle [format "    $msg" $modLft "Left " $pctLft $sz(Left) ]
+            puts $handle [format "    $msg" $modRgt "Right" $pctRgt $sz(Right)]
             puts $handle "\n"
 
-            # Load FIRST diff hunk (if any - Fake the values when none exist)
-            #   ("F" is simply a list of FIELD names we read the data into)
-            #    (while "H" is the index of the HUNK that gets read from)
+            # (Re-)Load FIRST diff hunk values (if any - Fakes still exist)
+            #   ("H", "skpH" & "pfxH" just track the hunk 'ndx' for use later)
             # N.B. code DETECTs & INTERPOLATEs further hunks AS lines advance
-            lappend F S E P(Left) O(Left) C(Left) P(Right) O(Right) C(Right)
-            if {$g(COUNT) > [set i [set pfxH [set H 0]]]} {
+            if {$g(COUNT) > [set i [set skpH [set pfxH [set H 0]]]]} {
                     foreach $F $g(scrInf,[set hID [hunk-id [incr H] DIFF]]) { }
-            } else {foreach $F    { 0 0 0 0 "" 0 0 "" }      { } }
+                if {[info exists g(overlap$hID)]}     {
+                    set C(Left) [set C(Right) "?"]} \
+                elseif {"$C(Left)$C(Right)" == ""}    {
+                    incr skpH ;# account for the 'ignored' hunk
+                }
+            }
 
             # Now produce the requested categories of data (if any)
-            set maxlines [expr {($report(doSideLeft)||$report(doSideRight))? \
-                                    int([$w(LeftText) index end-1lines]) : 0}]
-            while {[incr i] < $maxlines} {
+            if {(!$report(doSideRight) && !$report(doSideLeft))} {set maxlns 0}
+            while {[incr i] < $maxlns} {
 
                 set out(Left) [set out(Right) ""]
                 foreach side {Left Right} {
@@ -8014,7 +8286,7 @@ proc write-report {command args} {
                     # thus what SHOULD be displayed (if not 'off' by request)
                     #
                     # N.B> DESPITE coding as loop - this RARELY ever needs to!
-                    #   It exists ENTIRELY because there is NO 'goto' in TCL;
+                    #   It exists ENTIRELY because there is NO 'goto' in Tcl;
                     # thus a 'continue' is the ONLY way to RE-start this code !
                     while {true} {
 
@@ -8025,7 +8297,11 @@ proc write-report {command args} {
                                     # Step forward to the NEXT hunk mapping
                                     set hID [hunk-id [incr H] DIFF]
                                     foreach $F $g(scrInf,$hID) {}
-
+                                    if {[info exists g(overlap$hID)]}  {
+                                               set C(Left) [set C(Right) ?]} \
+                                    elseif {"$C(Left)$C(Right)" == ""} {
+                                        incr skpH ;# account for 'ignored' hunk
+                                    }
                                     # WHY IS THERE NO goto IN THIS LANGUAGE!!!
                                     #
                                     # RESTART waterfall: 'i' MAY now be INSIDE
@@ -8047,8 +8323,7 @@ proc write-report {command args} {
                         if {$LN && !$CB} { continue } {
                             # However, when actually *IN* a diff region make
                             # ONE 'Diff Header' prefix at 1st line of 1st side
-                            #   (but ONLY when its a REAL diff)
-                            if {"$C(Left)$C(Right)" != "" && $pfxH < $H } {
+                            if {$pfxH < ($H - $skpH) } {
                                 puts $handle "\nDiff #[incr pfxH] ($hID):"
                             }
                         }
@@ -8064,7 +8339,7 @@ proc write-report {command args} {
 
                     if {$report(doChangeMarkers$side)} {
                         append out($side) [string range \
-                                       [expr {$CB ? "$C($side)  " : "  "}] 0 1]
+                                      [expr {$CB ? "$C($side)  " : "  "}] 0 1]
                     }
 
                     if {"$report(doText$side)" != " (no text) "} {
@@ -8092,6 +8367,7 @@ proc write-report {command args} {
         }
     browse {
             set path [tk_getSaveFile -parent $w(reportPopup) \
+              -filetypes $opts(filetypes) \
               -initialdir [file dirname $report(filename)] \
               -initialfile [file tail $report(filename)]]
 
@@ -8469,7 +8745,9 @@ As a further note regarding the $g(name) "<itl>suggested</itl>" merge file\
       itself derives from an SCM system, in which case it will try to choose\
       its name from that of the Right window. When BOTH windows represent SCM\
       files, it will aim for the current directory that $g(name) was invoked\
-      from. Regardless of the <itl>default</itl> name presented, you may, of\
+      from, but the default name chosen will then be based from a fairly\
+      cryptic tempfile name which almost certainly will need renaming.\
+      Regardless of the <itl>default</itl> name presented, you may, of\
       course, place the output in any filename you designate.
 
 The remaining options perform the following services:
@@ -8489,6 +8767,26 @@ The remaining options perform the following services:
       be treated as the contributing "source" for the eventual merge output.
       Debug output (<cmp>-d</cmp>) while not really meant for the average\
       user, is simply mentioned here for completeness sake.
+
+<hdr>Network latency</hdr>
+$g(name) does not, itself, require network access to run. However, certain\
+      SCM systems are based on such technology and can thus introduce delays\
+      in the processing performed by $g(name). In fact, a network\
+      <itl>outage</itl> could even hang $g(name) while waiting for a response.
+      To help combat that possibility,\
+      <itl>particularly at tool startup</itl>, $g(name) <itl>may</itl> alert\
+      you that such a delay appears to be occurring. A popup status panel, in\
+      advance of the main $g(name) display, will present messages of\
+      activities occurring. As long as new activities continue to occur\
+      (perhaps every few seconds), no action is needed on your part.
+      However, be advised that should the messages stall and you attempt to\
+      <bld>dismiss</bld> this panel, you are, in fact, requesting that\
+      $g(name) <itl>ABORT</itl> completely.
+      This feedback mechanism simply provides you with interim updates until\
+      sufficient information can be obtained to present the main display.
+      Under normal conditions, no such messages are needed nor produced, and\
+      $g(name) <itl>will remove</itl> the status display itself when the main\
+      display is ready.
 
 <hdr>The Diff engine (and more quoting)</hdr>
 Although $g(name) was designed as a frontend to the classic, UNIX derived,\
@@ -8590,17 +8888,20 @@ At the bottom of the display is a two line window called the\
       left and right windows, one on top of the other. The "current line"\
       is defined by the line that has the blinking insertion cursor, which\
       can be set by merely clicking on any line in the display. This window\
-      may be hidden if the <btn>View</btn> menu item\
-      <btn>Show Line Comparison</btn> is deselected.
-All difference regions (DRs) are highlighted to set them apart from the\
-      surrounding text. The <itl>current difference region</itl>, or\
+      may be hidden if the <btn>View</btn> menu item "Show Line Comparison\
+      Window" is deselected.
+
+All difference regions (DRs) are <itl>usually</itl> highlighted to set them\
+      apart from the surrounding text, unless the "$pref(tagtext)" preference\
+      has been deselected. The <itl>current difference region</itl>, or\
       <bld>CDR</bld>, is further set apart so that it can be\
       correlated to its partner in the other text widget (that is, the CDR on\
-      the left matches the CDR on the right).
+      the left matches the CDR on the right). And when "$pref(syncscroll)" is\
+      also set, that Left and Right CDR will be horizontally aligned as well.
 
 <hdr>Changing the CDR</hdr>
 
-The CDR can be changed in a sequential manner by means of the <btn>Next</btn>\
+The CDR can be selected in a sequential manner by means of the <btn>Next</btn>\
       and <btn>Previous</btn> buttons. The <btn>First</btn> and\
       <btn>Last</btn> buttons allow you to quickly navigate to the\
       first or last CDR, respectively. For random access to the DRs, use the\
@@ -8608,10 +8909,11 @@ The CDR can be changed in a sequential manner by means of the <btn>Next</btn>\
 
 By clicking right over a window and using the popup menu you can select\
       <btn>Find Nearest Diff</btn> to find the diff record nearest the point\
-      where you clicked.
+      where you clicked, or simply double-click <itl>NOT</itl> over an\
+      existing DR, as a shortcut to the same result.
 
 You may also select any highlighted diff region as the current diff region by\
-      double-clicking on it.
+      just double-clicking <bld>on</bld> it.
 
 <hdr>Operations</hdr>
 
@@ -8665,22 +8967,23 @@ This menu is organized into a few sections, the first of which deals with\
       otherwise seem to match, but have been "grouped" by Diff into a larger\
       difference region are <bld>NEVER</bld> suppressed.
       IMPORTANT: toggling <itl>any</itl> of these settings will cause $g(name)\
-      to <itl>immediately</itl> re-invoke the diff engine so as to provide\
-      the requested interpretation. This <bld>will cause the loss</bld> of any\
-      merge work that may have been in progress at that time.
+      to <itl>immediately</itl> (upon "Apply"ing the dialog settings) re-invoke\
+      the diff engine so as to provide the requested interpretation. This\
+      <bld>will cause the loss</bld> of any merge work that may have been in\
+      progress at that time.
       In the second section are items controlling what information gets\
-      displayed within the tool itself. Both <btn>Show Line Numbers</btn> and\
-      <btn>Show Change Bars</btn> toggle the display of line numbers and\
+      displayed within the tool itself. Both <btn>$pref(showln)</btn> and\
+      <btn>$pref(showcbs)</btn> toggle the display of line numbers and\
       markers (respectively) in the text widgets. <btn>Show Diff Map</btn>\
       toggles the display of the diff map (see below) on or off.\
-      <btn>Show Line Comparison</btn> toggles the display of a literal\
+      The "Show Line Comparison Window" item toggles the display of a literal\
       two line over/under "line comparison" window at the bottom of the\
       display. As an alternative to that, the two mutually exclusive items\
       <btn>Show Inline Comparison (byte)</btn> or\
       <btn>Show Inline Comparison (recursive)</btn> will display the specific\
       interline differences as configurable highlighting directly\
       <itl>within</itl> the Left and Right text displays themselves. You may\
-      choose any combination, at any time, as suits your comprehension.
+      choose any combination, at any time, as suits your comprehension needs.
       The third section addresses automatic processing that can be performed\
       as other iteractions in $g(name) take place.\
       If <btn>Synchronize Scrollbars</btn> is on, the Left and Right\
@@ -8688,8 +8991,8 @@ This menu is organized into a few sections, the first of which deals with\
       the other. If <btn>Auto Center</btn> is on, jumping (by whatever means)\
       to a new CDR centers that new CDR automatically. <btn>Auto Select</btn>\
       will attempt to designate the diff region currently closest to the\
-      middle of a scrolling Left/Right text window <itl>AS</itl> the new CDR;\
-      however, but only if <btn>Synchronize Scrollbars</btn> is also ON.
+      middle of a scrolled Left/Right text window <itl>AS</itl> the new CDR;\
+      however, but only when <btn>$pref(syncscroll)</btn> is also ON.
       The fourth (and final) section basically reiterates simple navigation\
       actions available elsewhere (toolbar, popup menu) for moving among the\
       various diff regions.
@@ -8771,19 +9074,21 @@ When a text widget has the focus, you may use the following shortcut keys:
 	l      Last diff
 	n      Next diff
 	p      Previous diff
-	1      Merge Choice 1
-	2      Merge Choice 2
+	1      Elect Left as the CDR Merge Choice
+	2      Elect Right as the CDR Merge Choice
+	3      Elect Left-then-Right as the CDR Merge Choice
+	4      Elect Right-then-Left as the CDR Merge Choice
 </cmp>
 The cursor keys, Home, End, PageUp and PageDown work as expected, adjusting\
       the view in whichever text window has the focus. Note that if\
-      <btn>Synchronize Scrollbars</btn> is set in\
-      <btn>Preferences</btn>, both windows will scroll at the same time.
+      <btn>$pref(syncscroll)</btn> is set in <btn>Preferences</btn>, both\
+      windows will scroll at the same time.
 
 <hdr>Scrolling</hdr>
 
-To scroll the text widgets independently, make sure <btn>Synchronize\
-      Scrollbars</btn> in <btn>Preferences</btn> is off. If it is on,\
-      scrolling either text widget scrolls the other. Scrolling does not\
+To scroll the text widgets independently, make sure\
+      <btn>$pref(syncscroll)</btn> in <btn>Preferences</btn> is off. If it is\
+      on, scrolling either text widget scrolls the other. Scrolling does not\
       change the current diff record (CDR), nor will it cause the Merge\
       Window (if displayed) to scroll. A Mouse scroll-wheel is also\
       recognized for scrolling vertically, or, if the <cmp>Shift</cmp> key\
@@ -8792,31 +9097,50 @@ To scroll the text widgets independently, make sure <btn>Synchronize\
 <hdr>Diff Marks</hdr>
 
 You can set "markers" at specific diff regions for easier navigation. To do\
-      this, click on the <btn>Set</btn> Mark button. It will create a new\
-      toolbar button that will jump back to this specific diff\
-      region. To clear a diff mark, go to that diff record and click on the\
-      <btn>Clear</btn> Mark button.
+      this, click on the <btn>Set</btn> Mark button when the desired DR is\
+      currently the CDR. It will create a new toolbar button that will jump\
+      back to this specific diff region. To clear a diff mark, first go to\
+      that diff record, then click on the <btn>Clear</btn> Mark button.
 
 <hdr>Diff Map</hdr>
 
 The diff map is a map of all the diff regions. It is shown in the middle of\
       the main window if <btn>Show Diff Map</btn> on the <btn>View</btn> menu\
       is on. The map is a miniature of the file's diff regions from top to\
-      bottom. Each diff region is rendered as a patch of color, Delete as\
-      red, Insert as green and Change as blue. In the case of a 3-way merge,\
-      overlap regions are marked in yellow. These colors are the defaults\
-      provided by $g(name), but can be adjusted via the\
+      bottom. Each diff region is rendered as a patch of color; initially\
+      Delete as red, Insert as green and Change as blue and in the case of a\
+      3-way merge, overlap regions are marked in yellow. These colors are the\
+      defaults provided by $g(name), but can be adjusted via the\
       <btn>Preferences...</btn> item in the <btn>Edit</btn> menu, to perhaps\
-      compensate for better contrast or interactions with other objects\
-      onscreen with your particular monitor (or simply personal taste).
+      compensate for better contrast or spectrum adjustments given other\
+      objects onscreen with your particular monitor (or simply personal taste).
       The height of each patch corresponds to the relative size of the diff\
       region. A thumb lets you interact with the map as if it were a scrollbar,\
       and Mouse scroll-wheel actions are fully supported, but will be\
       <itl>directed</itl> to whichever of the two text windows is holding\
       the current input focus, if the windows are not synchronized.\
-      All diff regions are drawn on the map even if too small to be visible.\
-      For large files with small nearby diff regions, this may result in\
-      patches overwriting each other.
+      All diff regions are drawn on the map even if too thin to ordinarily be\
+      visible. For large files with small nearby diff regions, this may result\
+      in patches overwriting each other.
+
+<hdr>Merge Preview</hdr>
+
+To see an ongoing preview of the file that would be written by\
+      <btn>Write Merge File</btn>, select <btn>Show Merge Window</btn> in the\
+      <btn>Merge</btn> menu. A separate window will be shown containing the\
+      preview. It is updated as you select merge choices, and provides markers\
+      that remind you as to which side (Left/Right) is contributing its diff\
+      region into the result. Note that when viewing a choice such as the\
+      Left-side of an "add"-type CDR, there is <itl>nothing</itl> to actually\
+      display. Additionally, the Preview window is responsive to the current\
+      <btn>$pref(showln)</btn> preference setting. It is also synchronized\
+      with the other text widgets when <btn>Synchronize Scrollbars</btn> is\
+      on, at least as far as actions that <itl>change</itl> the CDR, however\
+      it <bld>does not</bld> actually <itl>scroll</itl> in unison with the\
+      other windows, primarily because as a representation of the eventual\
+      Merge file, it does NOT HAVE any <itl>padding</itl> lines which accounts\
+      for a substantial amount of the vertical spacing being scrolled by the\
+      other windows.
 
 <hdr>Merging</hdr>
 
@@ -8824,9 +9148,11 @@ To merge the two files, go through the difference regions (via <btn>Next</btn>,\
       <btn>Prev</btn> or whatever other means you prefer) and select\
       <btn>L</btn> (for "Left") or <btn>R</btn> (for "Right"), located\
       adjacent to the toolbar "Merge Choice:" label, assigning which side\
-      should be used for each. The initial selection (after invoking Diff)\
-      will have already been established by a user preference and/or whether\
-      a 3way (involving an ancestor file) was performed.
+      should be used for each. Alternately, the "<bld>1</bld>" & "<bld>2</bld>"\
+      keys will do the same, respectively. The initial selections (after\
+      invoking Diff) will have already been established by a user preference\
+      and/or whether a 3way (involving an ancestor file) was performed\
+      (explained further in the section "<bld>3way merging</bld>" below).
       Selecting <btn>L</btn> means that the the left-most file's version of\
       the difference will be used in creating the final result; choosing\
       <btn>R</btn> means that the right-most file's difference is used. Each\
@@ -8901,24 +9227,51 @@ Oftentimes, you may find that the "Diff" program has packed several lines\
       transitory until the merge file is actually written out, and\
       <itl>can not</itl> be automatically recovered.
 
-<hdr>Merge Preview</hdr>
+<hdr>3way Merging</hdr>
 
-To see an ongoing preview of the file that would be written by\
-      <btn>Write Merge File</btn>, select <btn>Show Merge Window</btn> in the\
-      <btn>Merge</btn> menu. A separate window will be shown containing the\
-      preview. It is updated as you select merge choices, and provides markers\
-      that remind you as to which side (Left/Right) is contributing its diff\
-      region into the result. Note that when viewing a choice such as the\
-      Left-side of an "add"-type CDR, there is <itl>nothing</itl> to actually\
-      display. Additionally, the Preview window is responsive to the current\
-      <btn>$pref(showln)</btn> setting. It is also\
-      synchronized with the other text widgets when\
-      <btn>Synchronize Scrollbars</btn> is on, at least as far as actions that\
-      <itl>change</itl> the CDR, however it <bld>does not</bld> actually\
-      <itl>scroll</itl> in unison with the other windows, primarily because\
-      as a representation of the eventual Merge file, it does NOT HAVE any\
-      <itl>padding</itl> lines which accounts for a substantial amount of the\
-      vertical spacing being scrolled by the other windows.
+A 3way merge, as the name suggests, involves a third file that is expected\
+      to have been an earlier <itl>common</itl> version to <itl>both</itl>\
+      files presently being compared. This <bld>ancestor</bld> file allows\
+      $g(name) to look backward in time, to address the unique issue of\
+      intentionally diverged <itl>independent</itl> modifications (the Left\
+      and Right files) being merged back together into a single output file. 
+      Specifically, $g(name) wants to identify the modifications that\
+      <itl>created</itl> the Left and Right variants, with the intention of\
+      preserving <bld>ALL</bld> such changes (both sides) into the final\
+      result, as automatically as possible. Thus, among the Left/Right diffs\
+      being shown by $g(name), certain lines may, or may not, have been\
+      modified during their creation from the ancestor. We call these\
+      <bld>ancestral</bld> artifacts, and $g(name) will annotate such lines\
+      using markers to the left of the line numbers (if displayed), denoting\
+      what kind of modification (add, chg) had previously occurred. Note that\
+      <itl>ancestral deletions</itl> no longer <itl>exist</itl> in their\
+      respective Left/Right files, and thus were effectively and implicitly\
+      embedded into those files at that time.
+      Generally, when ancestral markers show up in ONLY the Left (or Right)\
+      windows, $g(name) simply responds by choosing that side as the initial\
+      merge choice for that region. When <itl>BOTH</itl> sides show markers\
+      $g(name) selects the "Right" side, but also declares the region as a\
+      <bld>collision</bld> which requires user assistance to resolve,\
+      highlighting it appropriately to draw it to your attention.
+      Despite all automatic attempts to choose the proper merge choice,\
+      $g(name) does not and can not, itself, resolve arbitrary collisions.\
+      However, as it turns out, the <btn>Split</btn> tool, by repartioning the\
+      region into distinct smaller regions, can often be used to\
+      <itl>resolve</itl> collisions by ensuring only one side of each split\
+      portion only carries markers from a single side. At such time, $g(name)\
+      will re-assign the affected merge choices appropriately, perhaps\
+      eliminating the entire collision altogether.
+      Because of this ability to remove the collisions through direct user\
+      interaction using <btn>Split</btn>, $g(name) will <itl>also presume</itl>\
+      that independently choosing any <bld>manually selected</bld> merge choice\
+      <itl>yourself</itl>, when dealing with a collision is trying to\
+      accomplish the same goal, and <bld>will remove</bld> all indications of\
+      the collision, <itl>provided</itl> you agree via a popup question. Yet\
+      note however, that the responsibility in that case, is yours; $g(name)\
+      has no additional means to detect if the collision was truely resolved.
+      Finally, remember that like all "adjustments" done after having run a\
+      Diff, all of it is <itl>entirely</itl> transitory until the Merge output\
+      file is generated, or another Diff is invoked.
 
 <hdr>Original Author</hdr>
 John M. Klassa
@@ -9478,8 +9831,10 @@ proc do-edit {} {
     } else {
         # Got the file - GET the line number
         set file "$finfo(pth,$ndx)"
-        foreach {line na na O(1) na na O(0)} $g(scrInf,$g(currdiff)) {break}
-        incr line -$O([expr {int($ndx & 1)}])
+        if {$g(count)} {
+            foreach {line na na O(1) na na O(0)} $g(scrInf,$g(currdiff)) {break}
+            incr line -$O([expr {int($ndx & 1)}])
+        } else {set line 1} ;# have to pick something if no CDR exists
 
         if {[string length [string trim $opts(editor)]] == 0} {
             simpleEd open "$file" $line
@@ -9579,7 +9934,8 @@ proc simpleEd {command args} {
     saveAs {
             set filename [lindex $args 0]
             set w [lindex $args 1]
-            set filename [tk_getSaveFile -initialfile [file tail $filename] \
+            set filename [tk_getSaveFile -filetypes $opts(filetypes) \
+                                         -initialfile [file tail $filename] \
                                          -initialdir [file dirname $filename]]
             if {$filename != ""} {
                 simpleEd save $filename $w
