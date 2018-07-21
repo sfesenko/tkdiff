@@ -1,3 +1,7 @@
+4.3.4           (07/21/2018):
+     * Emergency Re-repair of the (V4.3.3) Merge content corruption issue
+     - previous fix targeted a phantom cause (only fixed SOME cases)
+
 4.3.3           (07/19/2018):
      * Critical bug that MIGHT corrupt Merge content via Split use fixed
      * Re-implementation of 3way Diff support now functions properly
