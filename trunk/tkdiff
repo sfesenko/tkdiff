@@ -43,7 +43,7 @@ wm withdraw .
 
 # set a couple o' globals that we might need sooner than later
 set g(name) "TkDiff"
-set g(version) "4.3.3"
+set g(version) "4.3.4"
 
 # Startup phases:
 #   0  : Bare metal, looking for viable cmd args
@@ -5362,32 +5362,42 @@ proc merge-add-marks {{hIDS {}}} {
             return 
 
         } else {
-            # NEW hID - Find WHERE to add each, and then do so
-            #   May require some computation to get there
+            # NEW hID - Find WHERE to plant each new MARK
+            #   Apologies for the convoluted logic here, but we need a PRIOR
+            # hunk location as an anchor (if there is one.) If NOT, then NO
+            # numbers need adjusting; But if there IS, the rule of "Left only"
+            # view DOES NOT APPLY to that FIRST anchor. Each planted MARK then
+            # BECOMES the new anchor as we loop and is ALWAYS in "Left view"
+            set prvHid {}
             foreach hID "$hIDS" {
-                # First grab the closet PRIOR hunk (if there is one)
-                if {[set i [hunk-ndx $hID]] > 1} {incr i -1}
-                if {"[set prvHid [hunk-id $i]]" != "$hID"} {
-                    # Now determine WHERE that prev hunk sits in 'mergeText'
-                    # ADDing its CURRENT 'choice' SIZE (how many merge lines
-                    # its USING), then add the START location of the NEW
-                    # hunk (AFTER removing any PADDING of the previous hunk)
-                    # Using SCREEN numbering is OK because by then ....
+                # Identify the 1st closest PRIOR hunk INDEX (if unknown)
+                if {$prvHid == {}} {
+                    if {[set i [hunk-ndx $hID]] > 1} {incr i -1}
+                }
+                # If not YET known, produce prvHid and verify it really IS a
+                # "PRIOR" hunk, setting 'i' to ITS merge-choice value if yes
+                if {$prvHid != "" || ( "[set prvHid [hunk-id $i]]" != "$hID" \
+                                     && [set i $g(merge$prvHid)])} {
+                    # Now determine WHERE that anchor starts in 'mergeText',
+                    # ADDing its CURRENT SIZE (minus 1), plus the STARTING
+                    # position of the NEW hunk
                     set S [expr {int([$w(mergeText) index mark$prvHid]) \
-                                + [diff-size $prvHid $g(merge$prvHid)]  \
-                                - [lindex $g(scrInf,$prvHid) 2]         \
-                                + [lindex $g(scrInf,$hID) 0] - 1}]
-                    # ... getting the screen END Lnum of the PRIOR hunk,
+                                         +  [diff-size $prvHid $i] - 1  \
+                                         +  [lindex $g(scrInf,$hID) 0]} ]
+                    # Using SCREEN numbering is OK because when we arrange
+                    # to subtract the screen END Lnum of the PRIOR hunk ...
                     set O [lindex $g(scrInf,$prvHid) 1]
-                    # ... it all converts into the INTERVENING line count
+                    # ... it will all convert to the NEW hunk location
                 } else { foreach {S na na O} $g(scrInf,$hID) {break} }
 
                 # Set the NEW mark (and eventually fall thru to tagging)
                 $w(mergeText) mark set mark$hID [incr S -$O].0
                 $w(mergeText) mark gravity mark$hID left
+                set prvHid $hID ;# This becomes the NEXT anchor (as we loop)
+                set i 1         ;# and (by defn) is ALWAYS in a "Left" view
             }
         }
-    } else { ;# Do the entire Text (MUST BE in PURE LEFT content!!)
+    } else { ;# Do the entire Text (MUST BE in PURE LEFT context!!)
         foreach hID [set hIDS $g(diff)] {
             foreach {S na na O} $g(scrInf,$hID) {break}
 
