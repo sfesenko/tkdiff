@@ -422,8 +422,8 @@ catch {tk scaling [expr {100.0 / 72}]}
 # Exit with proper code
 ###############################################################################
 proc do-exit {{returncode {}}} {
-    debug-info "do-exit ($returncode)"
     global g w ASYNc
+    debug-info "do-exit ($returncode)"
 
     # During pgm startup, we MAY have built the status window just to let the
     # user know we are talking to a SCM server that MIGHT experience network
@@ -450,8 +450,8 @@ proc do-exit {{returncode {}}} {
 # Modal error dialog.
 ###############################################################################
 proc do-error {msg {title "Error"}} {
-    debug-info "do-error ($msg)"
     global g
+    debug-info "do-error ($msg)"
 
     tk_messageBox -message "$msg" -title "$g(name): $title" -icon error -type ok
 }
@@ -473,8 +473,8 @@ proc trap-trace {{title "Trace"}} {
 # created, otherwise put up a dialog and throw an exception.
 ###############################################################################
 proc fatal-error {msg} {
-    debug-info "fatal-error ($msg)"
     global g tcl_platform
+    debug-info "fatal-error ($msg)"
 
     if {$g(startPhase)} {
         tk_messageBox -title "Error" -icon error -type ok -message $msg
@@ -491,6 +491,7 @@ proc fatal-error {msg} {
 ###############################################################################
 proc tmpfile {n {forget 0}} {
     global g opts uniq
+
     set uniq [expr ($uniq + 1) ]
     set tmpdir [file nativename $opts(tmpdir)]
     set tmpfile [file join $tmpdir "[pid]-$n-$uniq"]
@@ -511,12 +512,12 @@ proc tmpfile {n {forget 0}} {
 # Returns the 3-tuple list "$stdout $stderr $exitcode"
 #
 # Operation is sensitive to the EXISTANCE (not value) of flag "ASYNc(trigger)"
-# to run in ASYNChronous .vs. BLOCKing mode. When running ASYNC, the event loop
-# is available for dispatching tasks encountered WHILE the command is processed 
+# to run in ASYNChronous .vs. BLOCKing mode. When running ASYNC, an event loop
+# is provided for dispatching tasks encountered WHILE the command is processed 
 ###############################################################################
 proc run-command {cmd {out {}}} {
-    debug-info "run-command ($cmd $out)"
     global ASYNc errorCode
+    debug-info "run-command ($cmd $out)"
 
     # Arrange for requested output format (given execution constraints)
     #  N.B> 'fout' will become one of: a channel, a cmd indirection, or empty.
@@ -542,15 +543,13 @@ proc run-command {cmd {out {}}} {
         # more importantly WATCHES for an EOF, telling us the cmd has completed
         set cmdout [open "|$cmd \"2>$cmderr\"" rb]
         chan configure $cmdout -blocking 0 -buffering none
-        chan event $cmdout readable [list wontapply $cmdout $fout]
-            #  <*> Well... it was SUPPOSED TO BE an anonymous handler proc :
-            # [list apply {{in out} {<*per 'wontapply' below*>}} $cmdout $fout]
-            #
-            #   BUT V8.6.3 bitches with "syntax: 'apply' should be 'apply'"
-            # which ITSELF is wrong as its complaint SHOULD'VE been:
-            #    "'apply' should be 'apply lambda in out'"    or similar,
-            # thus SOMETHING isnt being parsed properly along the way.... 
-
+        chan event $cmdout readable [list apply {{fin fptr} {
+                    global ASYNc
+                    if {$fptr != {}} {
+                        puts -nonewline $fptr [chan read $fin]
+                    } else {append ASYNc(out) [chan read $fin]}
+                    if {[chan eof $fin]} {set ASYNc(events) 0}
+                                                          }} $cmdout $fout]
         set ASYNc(events) 1
         ####
         vwait ASYNc(events) ;# wait here until we see EOF from handler above
@@ -592,16 +591,6 @@ proc run-command {cmd {out {}}} {
    #debug-info "runcmd RESULTS($exitcode): out([string length $STDout])\
                                 err([string length $STDerr]) appropriate ?"
     return [list "$STDout" "$STDerr" "$exitcode"]
-}
-
-# This stupidity SHOULD be an 'apply' scriptlet, but it bitches: "syntax"!
-#   (hence its NON-anonymous name - see 'chan event' call above)
-proc wontapply {fin fout} {
-    global ASYNc
-    if {$fout != {}} {
-        puts -nonewline $fout  [chan read $fin]
-    } else {append ASYNc(out) [chan read $fin]}
-    if {[chan eof $fin]} {set ASYNc(events) 0}
 }
 
 ###############################################################################
@@ -693,8 +682,7 @@ proc do-semantic-recompute {reason {onoff {}}} {
 # Align (or force set on/off) Info window item visibility
 ###############################################################################
 proc do-show-Info {{which {}}  {force {}}} {
-    global opts
-    global w
+    global g w opts
 
     if {$force != {}} {
         set opts($which) $force
@@ -768,7 +756,7 @@ proc translit-plot-txtags {twdg} {
 
     # Begin the database with a snapshot of the "settings" for what is
     # (effectively) the "textopt" tag layer (plain old file lines)
-    set DB [list [set nam t] "{$Fnt} $Aft $Hft $Fg $Bg"]
+    lappend DB [set nam t] "{$Fnt} $Aft $Hft $Fg $Bg"
 
     # Now, OVERLAY in PRECEDENCE ORDER, successive basic tags, recording each
     foreach t {difftag currtag} {
@@ -779,7 +767,7 @@ proc translit-plot-txtags {twdg} {
         append nam [string index $t 0]
         array set lut $opts($t)
         foreach op [array names lut -regexp {\-((f|b)g|(fo[rn]|ba))}] {
-            # (allow for abbreviations of the tag names)
+            # (allow for abbreviations of the V8.5 option keywords)
             switch -glob -- $op {
             "-for*" -
             "-fg"   { set Fg $lut($op) }                           ;# fg
@@ -796,7 +784,7 @@ proc translit-plot-txtags {twdg} {
         }
 
         # Append this snapshot of values to the overall database
-        lappend DB $nam [list "$Fnt" $Aft $Hft $Fg $Bg]
+        lappend DB $nam "{$Fnt} $Aft $Hft $Fg $Bg"
         array unset lut
     }
 
@@ -810,8 +798,8 @@ proc translit-plot-txtags {twdg} {
     foreach t {instag chgtag deltag overlaptag} {
 
         # Re-establish base settings prior to overlay of EACH mutual tag
-        foreach {nam base} [lrange $DB 2 4] {
-            foreach {Fnt Aft Hft Fg Bg} $base { }
+        foreach {nam base} [lrange $DB 2 5] {
+            lassign $base Fnt Aft Hft Fg Bg
 
             # Derive new name, then turn each tagging definition into a
             # "look up table"(lut) of its contents, looking for the option
@@ -820,7 +808,7 @@ proc translit-plot-txtags {twdg} {
             append nam [string map {i + c ! d - o ?} [string index $t 0]]
             array set lut $opts($t)
             foreach op [array names lut -regexp {\-((f|b)g|(fo[rn]|ba))}] {
-                # (again, allow for abbreviations of the tag names)
+                # (again, allow for abbreviations of the V8.5 option keywords)
                 switch -glob -- $op {
                 "-for*" -
                 "-fg"   { set Fg $lut($op) }                           ;# fg
@@ -837,7 +825,7 @@ proc translit-plot-txtags {twdg} {
             }
 
             # Append this snapshot of value to the overall database
-            lappend DB $nam [list "$Fnt" $Aft $Hft $Fg $Bg]
+            lappend DB $nam "{$Fnt} $Aft $Hft $Fg $Bg"
             array unset lut ;# throw away all lut tuples for next pass
         }
     }
@@ -861,12 +849,10 @@ proc translit-plot-txtags {twdg} {
 # Resolve present Info window plotting configuration (AFTER any chngd settings)
 ###############################################################################
 proc cfg-line-info {} {
-    global opts
-    global g
-    global w
+    global g w opts
 
     # First obtain the maximal Text widget font measurements
-    foreach {wDig wChg wSpc wEm} $g(scrInf,cfg) {}
+    lassign $g(scrInf,cfg) wDig wChg wSpc wEm
 
     # Then establish an X position for plotting the PRIMARY Info elements such
     # that the maximal line number (if visible) will FIT to its left
@@ -897,22 +883,22 @@ proc cfg-line-info {} {
 }
 
 ###############################################################################
-# Plot text widget line numbers and/or change bars in adjoining info canvas
+# Plot text widget line numbers and/or contrib markers in adjoining info canvas
 ###############################################################################
 proc plot-merge-info {args} {
-    global opts
-    global w
-    global g
+    global g w opts
 
-    # Ignore this routine if we havent gotten far enough into the processing
+    # Ignore this routine if not needed, havent gotten far enough in processing
     # -OR- its trigger will have zero effect on the displayed content
-    if {$g(startPhase) < 2  \
+    if {!$g(showmerge) || $g(startPhase) < 2  \
     ||    ([llength $args] > 0 && [lindex $args 0 1] in $g(benign))} return
 
     # Initialize:   Empty the canvas
+    #      Identify the line range of the CDR
     #      Import the 'tag' attr table and make it random access
     #      Begin with NO current attr group
     $w(mergeInfo) delete all
+    lassign [$w(mergeText) tag ranges currtag] sCDR eCDR
     array set attr $g(scrInf,tags)
     set aGRP {}
 
@@ -934,19 +920,21 @@ proc plot-merge-info {args} {
         # N.B. tags report in priority order, thus ZERO should be where to find
         #   EITHER 'diff(R/L)' (each being of lowest prio & mutually exclusive)
         switch [lindex [$w(mergeText) tag names $Lnum.0] 0] {
-        diffR { set side " >" ; set aNewGRP "td"}
-        diffL { set side " <" ; set aNewGRP "td"}
+        diffR { set aNewGRP [expr {$Lnum<$sCDR || $Lnum>=$eCDR ? "td" : "tdc"}]
+                set side " >" }
+        diffL { set aNewGRP [expr {$Lnum<$sCDR || $Lnum>=$eCDR ? "td" : "tdc"}]
+                set side " <" }
         default { set side {} ; set aNewGRP "t"}
         }
 
         # Instantiate correct 'tag' attribute group (if it changed)
         if {"$aNewGRP" != "$aGRP"} {
-            foreach {Fnt Asc Hgt Fg Bg} $attr([set aGRP $aNewGRP]) { }
+            lassign $attr([set aGRP $aNewGRP]) Fnt Asc Hgt Fg Bg
         }
 
         # We want to plot on the same BASELINE as the text widget, but it
         # must be EMULATED as canvas '-anchor' provides NO SUCH setting.
-        foreach {na y na na bl} $dline { }   ;# extract TxT y and baseline
+        lassign $dline na y na na bl ;# extract TxT y and baseline
         incr y $bl     ;# move y to its baseline then UP by the
         incr y -$Asc   ;# "plot font" ascent (=eff. NE/NW edge)
 
@@ -969,9 +957,7 @@ proc plot-merge-info {args} {
 # Plot text widget line numbers and/or change bars in adjoining info canvas
 ###############################################################################
 proc plot-line-info {side args} {
-    global opts
-    global w
-    global g
+    global g w opts
 
     # Ignore this routine if we havent gotten far enough into the processing
     #   -OR- everything that might have displayed is turned OFF anyway
@@ -1013,18 +999,17 @@ proc plot-line-info {side args} {
             # N.B> 'rngeSrch' (unlike hunk-id, et.al) uses ZERO-based indices
             #   so increment the index UNLESS it comes back as the last entry
             if {[set i [rngeSrch DIFF $Lnum "scrInf,"]] != $g(COUNT)} {incr i}
-            foreach $g(LR,$side) \
-                            $g(scrInf,[set hID [hunk-id $i DIFF]]) {break}
-        } else {foreach $g(LR,$side)    { 0 0 0 0 "" 0 0 "" }      {break} }
+            lassign $g(scrInf,[set hID [hunk-id $i DIFF]]) {*}$g(LR,$side)
+        } else {lassign       { 0 0 0 0 "" 0 0 "" }        {*}$g(LR,$side) }
 
         # When a 3way is active, it REQUIRES a per-line 'ancestral' mapping
         #   (so figure out where to START that mapping as well)
         if {$g(ancfileset)} {
             set anc(max) [llength $g(d3$side)]
             set anc(ndx) [rngeSrch d3$side [expr {$Lnum - $Ofst}]]
-            foreach {anc(fst) anc(lst) anc(mrk)}               \
-                [expr {$anc(ndx) < $anc(max)   ?               \
-                [lindex $g(d3$side) $anc(ndx)] : {0 0 " "} }]    { }
+            if {$anc(ndx) < $anc(max)} {lassign \
+                    [lindex $g(d3$side) $anc(ndx)] anc(fst) anc(lst) anc(mrk)
+            } else { lassign       {0 0 " "}       anc(fst) anc(lst) anc(mrk) }
         }
 
         # Map/plot Lnums, advancing as needed through any mapping entries.
@@ -1047,7 +1032,7 @@ proc plot-line-info {side args} {
                             # Step forward to the next hunk mapping
                             #   loading the NEXT scrInf,* entry settings
                             set hID [hunk-id [incr i] DIFF]
-                            foreach $g(LR,$side) $g(scrInf,$hID) {break}
+                            lassign $g(scrInf,$hID) {*}$g(LR,$side)
                             if {[info exists g(overlap$hID)]} {set Cbar "?"}
                             # Restart loop if 'Lnum' is NOW INSIDE the params
                             # of the newly read-in hunk (to support abutted
@@ -1062,12 +1047,12 @@ proc plot-line-info {side args} {
 
             # Instantiate correct 'tag' attribute group (if it changed)
             if {"$aNewGRP" != "$aGRP"} {
-                foreach {Fnt Asc Hgt Fg Bg} $attr([set aGRP $aNewGRP]) { }
+                lassign $attr([set aGRP $aNewGRP]) Fnt Asc Hgt Fg Bg
             }
 
             # We want to plot on the same BASELINE as the text widget, but it
             # must be EMULATED as canvas '-anchor' provides NO SUCH setting.
-            foreach {na y na na bl} $dline { }   ;# extract TxT y and baseline
+            lassign $dline na y na na bl ;# extract TxT y and baseline
             incr y $bl     ;# move y to its baseline then UP by the
             incr y -$Asc   ;# "plot font" ascent (=eff. NE/NW edge)
 
@@ -1086,7 +1071,7 @@ proc plot-line-info {side args} {
                         "+" { set Cfg $opts(mapdel) ; set Cbg $opts(mapins) }
                         "-" { set Cfg $opts(mapins) ; set Cbg $opts(mapdel) }
                         }
-                    } else { foreach {Cfg Cbg} "$Fg $Bg" { } }
+                    } else { lassign "$Fg $Bg" Cfg Cbg }
 
                     # Make/plot a fontsized ChangeBar "background rect"
                     set yy $Hgt
@@ -1102,6 +1087,7 @@ proc plot-line-info {side args} {
                 # Highlight LineNum ?
                 if {$opts(tagln)} {
                     # Make/plot a fontsized Lnum "background rect"
+                    #   (also underlays the ancestral marker - if active)
                     set yy $Hgt
                     set Dims [list $g(scrInf,tX) $y 1 [incr yy $y]]
                     $w(${side}Info) create rect $Dims -fill $Bg -outline $Bg
@@ -1111,7 +1097,7 @@ proc plot-line-info {side args} {
                     -fill $Fg -font $Fnt -text "[expr {$Lnum - $Ofst}]"
             }
 
-            # Inserts the 'ancestral' marker if a 3way is in progress
+            # Insert the 'ancestral' marker if a 3way is in progress
             #   (and we haven't walked off the list of markers altogether)
             if {$g(ancfileset) && $anc(ndx) < $anc(max) \
             &&  ($Lnum - $Ofst) >= $anc(fst) && ($Lnum - $Ofst) <= $anc(lst)} {
@@ -1121,8 +1107,8 @@ proc plot-line-info {side args} {
 
                 # Step map forward to next triplet (when 'last' has been used)
                 if {$anc(lst) == $Lnum - $Ofst} {
-                    foreach {anc(fst) anc(lst) anc(mrk)}  \
-                                    [lindex $g(d3$side) [incr anc(ndx)]] { }
+                    lassign [lindex $g(d3$side) [incr anc(ndx)]] \
+                            anc(fst) anc(lst) anc(mrk)
                 }
             }
 
@@ -1138,8 +1124,8 @@ proc plot-line-info {side args} {
 # files that were merged
 ###############################################################################
 proc split-conflictfile {name} {
-    debug-info "conflicts ($name)"
     global g opts
+    debug-info "conflicts ($name)"
 
     if {[catch {set input [open $name r]}]} {
         fatal-error "Couldn't open file '$name'"
@@ -1260,7 +1246,7 @@ proc scm-detect {fn} {
 # Returns 0 (Success) or 1 (Failed + diagnostic messages produced)
 ###############################################################################
 proc get-file-rev {fn ndx {r ""} {Scm {}}} {
-    global tcl_platform finfo opts g
+    global g opts finfo tcl_platform
     debug-info "get-file-rev ($fn $ndx \"$r\" $Scm)"
 
     # Establish SYNTAX of how a revision is specified per the SCM system
@@ -1502,8 +1488,8 @@ proc sccs-is-bk {} {
 #           1  Failed
 ###############################################################################
 proc get-file {fn ndx} {
-    debug-info "get-file ($fn $ndx)"
     global g finfo
+    debug-info "get-file ($fn $ndx)"
 
     set msg ""
     if {[file isfile $fn]} {
@@ -1526,11 +1512,7 @@ proc get-file {fn ndx} {
 #          >0 success (enough info SUPPLIED for at least 1 pairing to exist)
 ###############################################################################
 proc commandline {} {
-    global argv
-    global argc
-    global finfo
-    global opts
-    global g
+    global g opts finfo argv argc
 
     set g(initOK) 0
     set argindex 0
@@ -1668,10 +1650,8 @@ proc commandline {} {
 #          =0 failure (can not continue)
 ###############################################################################
 proc assemble-args {} {
+    global g opts finfo
     debug-info "assemble-args ()"
-    global finfo
-    global opts
-    global g
 
     if {$g(ancfile) != ""} {
         set g(ancfileset) 1
@@ -1925,9 +1905,9 @@ proc alignDecor {pairnum} {
 # Request git to supply relevant target argument(s)
 ###############################################################################
 proc inquire-git {revs msgRet} {
+    global finfo
     upvar $msgRet MSG
     debug-info "inquire-git ($revs)"
-    global finfo
 
     # Git diff requires 0-2 commit-ish "somethings" (hash, HEAD, etc...)
     #
@@ -2034,9 +2014,9 @@ proc inquire-git {revs msgRet} {
 # Request svn to supply relevant target argument(s)
 ###############################################################################
 proc inquire-svn {revs msgRet} {
+    global finfo
     upvar $msgRet MSG
     debug-info "inquire-svn ($revs)"
-    global finfo
 
     # 'svn diff --summarize' tells us WHAT changed across a range of revisions
     #
@@ -2106,11 +2086,8 @@ proc inquire-svn {revs msgRet} {
 # Set up the display
 ###############################################################################
 proc create-display {} {
+    global g w opts tmpopts tk_version
     debug-info "create-display ()"
-
-    global g opts bg tk_version
-    global w
-    global tmpopts
 
     # these are the four major areas of the GUI:
     # menubar - the menubar (duh)
@@ -2173,7 +2150,7 @@ proc create-display {} {
     foreach key [array names opts] {
         set ::tmpopts($key) $opts($key)
     }
-    apply
+    applypref
 
     # Make sure temporary files get deleted
     #bind . <Destroy> {del-tmp}
@@ -2234,8 +2211,7 @@ proc create-display {} {
 # sync up the left scrollbar with the right if they turn the option on
 ###############################################################################
 proc toggleSyncScroll {args} {
-    global opts
-    global w
+    global w opts
 
     if {$opts(syncscroll) == 1} {
         set yview [$w(RightText) yview]
@@ -2248,8 +2224,7 @@ proc toggleSyncScroll {args} {
 #  (notably - over the MAP window becomes somewhat Left/Right ambiguous)
 ###############################################################################
 proc show-popupMenu {x y} {
-    global w
-    global g
+    global g w
 
     set window [winfo containing $x $y]
     if {$window == $w(LeftText)  || $window == $w(LeftInfo)  \
@@ -2289,8 +2264,8 @@ proc show-popupMenu {x y} {
 # build the right-click popup menu
 ###############################################################################
 proc build-popupMenu {} {
+    global g w
     debug-info "build-popupMenu ()"
-    global w g
 
     # this routine assumes the other windows already exist...
     menu $w(popupMenu)
@@ -2323,10 +2298,7 @@ proc build-popupMenu {} {
 # Load a different file of a multi-file diff
 ###############################################################################
 proc multiFileMenu {command index} {
-    global w
-    global opts
-    global finfo
-
+    global w opts finfo
     debug-info "multiFileMenu ($command $index) -> $finfo(fCurpair)"
 
     if {$finfo(fPairs) <= 1} {return}
@@ -2358,9 +2330,8 @@ proc multiFileMenu {command index} {
 # handle popup menu commands
 ###############################################################################
 proc popupMenu {command args} {
+    global g w
     debug-info "popupMenu ($command $args)"
-    global g
-    global w
 
     switch -- $command {
     center {
@@ -2394,9 +2365,7 @@ proc popupMenu {command args} {
 # Resize the text windows relative to each other.  The 8.4 method works
 # much better.
 proc pane_drag {win x} {
-    global w
-    global finfo
-    global tk_version
+    global w finfo tk_version
 
     set relX [expr $x - [winfo rootx $win]]
     set maxX [winfo width $win]
@@ -2426,12 +2395,8 @@ proc pane_drag {win x} {
 # sort of fluff)
 ###############################################################################
 proc build-client {} {
+    global g w opts map tk_version
     debug-info "build-client ()"
-    global g
-    global w
-    global opts
-    global map
-    global tk_version
 
     frame $w(client) -bd 2 -relief flat
 
@@ -2503,7 +2468,7 @@ proc build-client {} {
     # Technically, we lack the data to configure this properly until both
     # primary files have been loaded into the above text widgets. But we
     # need them right NOW for constructing the overall window layout.
-    # Remaining options happen later via "apply" and "cfg-line-info" procs
+    # Remaining options happen later via "applypref" and "cfg-line-info"
     canvas $w(LeftInfo)  -highlightthickness 0
     canvas $w(RightInfo) -highlightthickness 0
 
@@ -2515,7 +2480,7 @@ proc build-client {} {
     # the bottom window (lineview) uses reverse video to highlight
     # diffs, so we need to figure out what reverse video is, and
     # define the tag appropriately
-    eval $w(BottomText) tag configure diff $opts(bytetag)
+    $w(BottomText) tag configure diff {*}$opts(bytetag)
 
     # Set up text tags for the 'current diff' (the one chosen by the 'next'
     # and 'prev' buttons) .vs. any ol' diff region.  All diff regions are
@@ -2526,9 +2491,9 @@ proc build-client {} {
     # it's obvious which diffs in the left and right-hand text widgets match.
 
     foreach widget [list $w(LeftText) $w(RightText)] {
-        eval "$widget configure $opts(textopt)"
+        $widget configure {*}$opts(textopt)
         foreach t {diff curr del ins chg overlap inline} {
-            eval "$widget tag configure ${t}tag $opts(${t}tag)"
+            $widget tag configure ${t}tag {*}$opts(${t}tag)
         }
         $widget tag raise sel ;# Keep this on top
     }
@@ -2652,8 +2617,7 @@ proc build-client {} {
 # Perform inline data re-computation and/or re-tagging across ALL hunks
 ###############################################################################
 proc compute-inlines {optNam {retag 0}} {
-    global g
-    global w
+    global g w
     debug-info "compute-inlines ($optNam $retag)"
 
     # Translate from TkDiff optionName to algorithm style name
@@ -2675,7 +2639,7 @@ proc compute-inlines {optNam {retag 0}} {
         # Remember: only chg-type hunks can EVER have inline diffs
         if {[string match "*c*" "$hID"]} {
             if {$optNam != {}} {
-                foreach {Ls Le P(1) na na P(2)} $g(scrInf,$hID) {break}
+                lassign $g(scrInf,$hID) Ls Le P(1) na na P(2)
 
                 # Determine last UN-padded Lnum, then process L/R line pairs
                 set first $Ls
@@ -2852,6 +2816,7 @@ proc find-inline-diff-byte {hID pairID s1 s2} {
 
 set text_widget_proc {
     global w
+
     set real "[lindex [info level [info level]] 0]_"
     set result [eval $real $command $args]
     if {$command == "mark"} {
@@ -2889,9 +2854,8 @@ set text_widget_proc {
 # create (if necessary) and show the find dialog
 ###############################################################################
 proc show-find {} {
+    global g w tcl_platform
     debug-info "show-find ()"
-    global w g
-    global tcl_platform
 
     if {![winfo exists $w(findDialog)]} {
         toplevel $w(findDialog)
@@ -3022,9 +2986,8 @@ proc do-copy {} {
 # search for the text in the find dialog
 ###############################################################################
 proc do-find {} {
+    global g w
     debug-info "do-find ()"
-    global g
-    global w
 
     if {![winfo exists $w(findDialog)] || ![winfo ismapped $w(findDialog)]} {
         show-find
@@ -3080,11 +3043,8 @@ proc do-find {} {
 # Build the menu bar
 ###############################################################################
 proc build-menubar {} {
+    global g w opts finfo
     debug-info "build-menubar ()"
-    global g
-    global opts
-    global finfo
-    global w
 
     menu $w(menubar)
 
@@ -3362,8 +3322,8 @@ proc reload-multifile {pairs} {
 # Now used only for menu items
 ###############################################################################
 proc showTooltip {which w} {
-    global tooltip
     global g
+
     switch -- $which {
     menu {
             if {[catch {$w entrycget active -label} label]} {
@@ -3391,9 +3351,8 @@ proc showTooltip {which w} {
 # Build the toolbar, in text or image mode
 ###############################################################################
 proc build-toolbar {} {
+    global w g opts
     debug-info "build-toolbar ()"
-    global w g
-    global opts
 
     frame $w(toolbar) -bd 0
 
@@ -3448,50 +3407,50 @@ proc build-toolbar {} {
       -command moveTo -width 20
 
     # rediff...
-    toolbutton $toolbar.rediff_im -image rediffImage -command recompute-diff \
+    toolbutton $toolbar.rediff_im -image rediffImg -command recompute-diff \
       -bd 1
     toolbutton $toolbar.rediff_tx -text "Rediff" -command recompute-diff \
       -bd 1 -pady 1
 
     # split/combine ...
-    toolbutton $toolbar.split_im -image splitDiffImage -bd 1 \
+    toolbutton $toolbar.split_im -image splitDiffImg -bd 1 \
       -command [list splcmb-Dialog 0]
     toolbutton $toolbar.split_tx -text "Split..." -bd 1 -pady 1 \
       -command [list splcmb-Dialog 0]
 
-    toolbutton $toolbar.cmbin_im -image cmbinDiffImage -bd 1 \
+    toolbutton $toolbar.cmbin_im -image cmbinDiffImg -bd 1 \
       -command [list splcmb-Dialog 1]
     toolbutton $toolbar.cmbin_tx -text "Combine..." -bd 1 -pady 1\
       -command [list splcmb-Dialog 1]
 
     # find...
-    toolbutton $toolbar.find_im -image findImage -command do-find -bd 1
+    toolbutton $toolbar.find_im -image findImg -command do-find -bd 1
     toolbutton $toolbar.find_tx -text "Find" -command do-find -bd 1 -pady 1
 
     # navigation widgets
     label $toolbar.diffnavlbl -text "Diff:" -pady 0 -bd 2 -relief groove
 
-    toolbutton $toolbar.prev_im -image prevDiffImage -command [list move -1] \
+    toolbutton $toolbar.prev_im -image prevDiffImg -command [list move -1] \
       -bd 1
     toolbutton $toolbar.prev_tx -text "Prev" -command [list move -1] -bd 1 \
       -pady 1
 
-    toolbutton $toolbar.next_im -image nextDiffImage -command [list move 1] \
+    toolbutton $toolbar.next_im -image nextDiffImg -command [list move 1] \
       -bd 1
     toolbutton $toolbar.next_tx -text "Next" -command [list move 1] -bd 1 \
       -pady 1
 
-    toolbutton $toolbar.first_im -image firstDiffImage -command [list move \
+    toolbutton $toolbar.first_im -image firstDiffImg -command [list move \
       first] -bd 1
     toolbutton $toolbar.first_tx -text "First" -command [list move first] \
       -bd 1 -pady 1
 
-    toolbutton $toolbar.last_im -image lastDiffImage -command [list move \
+    toolbutton $toolbar.last_im -image lastDiffImg -command [list move \
       last] -bd 1
     toolbutton $toolbar.last_tx -text "Last" -command [list move last] -bd 1 \
       -pady 1
 
-    toolbutton $toolbar.center_im -image centerDiffsImage -command center -bd 1
+    toolbutton $toolbar.center_im -image centerDiffsImg -command center -bd 1
     toolbutton $toolbar.center_tx -text "Center" -command center -bd 1 -pady 1
 
     # the merge widgets
@@ -3499,7 +3458,7 @@ proc build-toolbar {} {
 
     radiobutton $toolbar.m2_im -borderwidth 1 -indicatoron false \
       -selectcolor $w(selcolor) \
-      -image mergeChoice2Image -value 2 -variable g(toggle) -command \
+      -image mergeChoice2Img -value 2 -variable g(toggle) -command \
       [list do-merge-choice 2] -takefocus 0
     radiobutton $toolbar.m2_tx -borderwidth 1 -indicatoron true -text "R" \
       -value 2 -variable g(toggle) -command [list do-merge-choice 2] \
@@ -3507,7 +3466,7 @@ proc build-toolbar {} {
 
     radiobutton $toolbar.m1_im -borderwidth 1 -indicatoron false \
       -selectcolor $w(selcolor) \
-      -image mergeChoice1Image -value 1 -variable g(toggle) -command \
+      -image mergeChoice1Img -value 1 -variable g(toggle) -command \
       [list do-merge-choice 1] -takefocus 0
     radiobutton $toolbar.m1_tx -borderwidth 1 -indicatoron true -text "L" \
       -value 1 -variable g(toggle) -command [list do-merge-choice 1] \
@@ -3515,7 +3474,7 @@ proc build-toolbar {} {
 
     radiobutton $toolbar.m12_im -borderwidth 1 -indicatoron false \
       -selectcolor $w(selcolor) \
-      -image mergeChoice12Image -value 12 -variable g(toggle) -command \
+      -image mergeChoice12Img -value 12 -variable g(toggle) -command \
       [list do-merge-choice 12] -takefocus 0
     radiobutton $toolbar.m12_tx -borderwidth 1 -indicatoron true -text "LR" \
       -value 12 -variable g(toggle) -command [list do-merge-choice 12] \
@@ -3523,7 +3482,7 @@ proc build-toolbar {} {
 
     radiobutton $toolbar.m21_im -borderwidth 1 -indicatoron false \
       -selectcolor $w(selcolor) \
-      -image mergeChoice21Image -value 21 -variable g(toggle) -command \
+      -image mergeChoice21Img -value 21 -variable g(toggle) -command \
       [list do-merge-choice 21] -takefocus 0
     radiobutton $toolbar.m21_tx -borderwidth 1 -indicatoron true -text "RL" \
       -value 21 -variable g(toggle) -command [list do-merge-choice 21] \
@@ -3532,12 +3491,12 @@ proc build-toolbar {} {
     # The bookmarks
     label $toolbar.bkmklbl -text "Mark:" -pady 0 -bd 2 -relief groove
 
-    toolbutton $toolbar.bkmkset_im -image markSetImage -command \
+    toolbutton $toolbar.bkmkset_im -image markSetImg -command \
       [list diffmark mark] -bd 1
     toolbutton $toolbar.bkmkset_tx -text "Set" -command [list diffmark mark] \
       -bd 1 -pady 1
 
-    toolbutton $toolbar.bkmkclear_im -image markClearImage -command \
+    toolbutton $toolbar.bkmkclear_im -image markClearImg -command \
       [list diffmark clear] -bd 1
     toolbutton $toolbar.bkmkclear_tx -text "Clear" -command [list diffmark \
       clear] -bd 1 -pady 1
@@ -3589,11 +3548,7 @@ proc build-toolbar {} {
 proc pack-toolbuttons {toolbar} {
     global w opts
 
-    if {$opts(toolbarIcons)} {
-        set bp "im"
-    } else {
-        set bp "tx"
-    }
+    set bp [expr {$opts(toolbarIcons) ? "im" : "tx"}]
 
     pack $toolbar.combo -side left -padx 2
     pack $toolbar.sep1 -side left -fill y -pady 2 -padx 2
@@ -3650,8 +3605,8 @@ proc pack-toolbuttons {toolbar} {
 }
 
 proc reconfigure-toolbar {} {
-    debug-info "reconfigure-toolbar ()"
     global w
+    debug-info "reconfigure-toolbar ()"
 
     foreach button [winfo children $w(toolbar)] {
         pack forget $button
@@ -3661,9 +3616,8 @@ proc reconfigure-toolbar {} {
 }
 
 proc build-status {} {
+    global g w
     debug-info "build-status ()"
-    global w
-    global g
 
     frame $w(status) -bd 0
 
@@ -3674,7 +3628,7 @@ proc build-status {} {
     # on top of whatever is placed there. So, we'll add a little bit
     # of whitespace there. It's harmless, so we'll do it on all of the
     # platforms.
-    label $w(status).blank -image nullImage -width 16 -bd 1 -relief sunken
+    label $w(status).blank -image nullImg -width 16 -bd 1 -relief sunken
 
     label $w(statusCurrent) -textvariable g(statusCurrent) -anchor e \
       -width 14 -borderwidth 1 -relief sunken -padx 4 -pady 2
@@ -3693,9 +3647,7 @@ proc build-status {} {
 # Once a button is down, the mode locks and mouse X-location becomes irrelevant
 ###############################################################################
 proc handleMapEvent {event y} {
-    global opts
-    global w
-    global g
+    global g w opts
     #debug-info "handleMapEvent $event $y"
 
     switch -- $event {
@@ -3765,18 +3717,16 @@ proc toolsep {w} {
 }
 
 proc toolbutton {w args} {
-    global tcl_platform
-    global opts
-    global g
+    global g opts tcl_platform
 
     # create the button
-    eval button $w $args
+    button $w {*}$args
 
     # add minimal tooltip-like support
-    bind $w <Enter> [list toolbutton:handleEvent <Enter> %W]
-    bind $w <Leave> [list toolbutton:handleEvent <Leave> %W]
-    bind $w <FocusIn> [list toolbutton:handleEvent <FocusIn> %W]
-    bind $w <FocusOut> [list toolbutton:handleEvent <FocusOut> %W]
+    bind $w <Enter> [list toolbtnEvent <Enter> %W]
+    bind $w <Leave> [list toolbtnEvent <Leave> %W]
+    bind $w <FocusIn> [list toolbtnEvent <FocusIn> %W]
+    bind $w <FocusOut> [list toolbtnEvent <FocusOut> %W]
 
     $w configure -relief $opts(relief)
 
@@ -3784,9 +3734,8 @@ proc toolbutton {w args} {
 }
 
 # handle events in our fancy toolbuttons...
-proc toolbutton:handleEvent {event w {isToolbutton 1}} {
-    global g
-    global opts
+proc toolbtnEvent {event w {isToolbutton 1}} {
+    global g opts
 
     switch -- $event {
     "<Enter>" {
@@ -3822,8 +3771,7 @@ proc toolbutton:handleEvent {event w {isToolbutton 1}} {
 # move the map thumb to correspond to current shown merge...
 ###############################################################################
 proc map-move-thumb {y1 y2} {
-    global g
-    global w
+    global g w
 
     set thumbheight [expr {($y2 - $y1) * $g(mapheight)}]
     if {$thumbheight < $g(thumbMinHeight)} {
@@ -4000,9 +3948,8 @@ proc common-navigation {args} {
 # set or clear a "diff mark" -- a hot button to move to a particular diff
 ###############################################################################
 proc diffmark {option {diff -1}} {
+    global g w
     debug-info "diffmark ($option $diff)"
-    global g
-    global w
 
     if {$diff == -1} {
         set diff $g(pos)
@@ -4054,13 +4001,8 @@ proc diffmark {option {diff -1}} {
 # Customize the display (among other things).
 ###############################################################################
 proc customize {} {
+    global g w pref opts tmpopts tcl_platform
     debug-info "customize ()"
-    global pref
-    global g
-    global w
-    global opts
-    global tmpopts
-    global tcl_platform
 
     catch {destroy $w(preferences)}
     toplevel $w(preferences)
@@ -4080,7 +4022,7 @@ proc customize {} {
     button $w(preferences).buttons.dismiss -width 8 -text "Dismiss" \
       -command {destroy $w(preferences)}
     button $w(preferences).buttons.apply -width 8 -text "Apply" \
-      -command {apply}
+      -command {applypref}
     button $w(preferences).buttons.save -width 8 -text "Save" -command save
 
     button $w(preferences).buttons.help -width 8 -text "Help" \
@@ -4390,7 +4332,7 @@ proc validate {type name index op} {
 # Specialized color-picker invoked by button (feedback to specific button -bg)
 ###############################################################################
 proc clrpick {wdg key} {
-    global tmpopts pref
+    global pref tmpopts
 
     set color [tk_chooseColor -initialcolor [$wdg cget -activebackground] \
                       -parent [file rootname $wdg] -title "Choose $pref($key)"]
@@ -4403,7 +4345,7 @@ proc clrpick {wdg key} {
 # Manage user interaction with any pref represented via a 'list of values'
 ###############################################################################
 proc editLstPref {key args} {
-    global tmpopts pref
+    global pref tmpopts
 
     # Empty values simply have no effect and are ignored
     #   (we sortof use it as feedback that we "accepted" the add/delete)
@@ -4542,12 +4484,9 @@ proc customize-initLabels {} {
 ###############################################################################
 # Apply customization changes.
 ###############################################################################
-proc apply {} {
-    debug-info "apply ()"
-    global tk_version screenWidth screenHeight
-    global opts tmpopts
-    global pref
-    global w g
+proc applypref {} {
+    global g w pref opts tmpopts tk_version screenWidth screenHeight
+    debug-info "applypref ()"
 
     grid propagate $w(client) t
     if {! [file isdirectory $tmpopts(tmpdir)]} {
@@ -4677,7 +4616,7 @@ proc apply {} {
     # flag values we can assess AFTERWARD to enforce the larger precedence
     # issues - thus avoiding the "excess" work alluded to above.
     #
-    #   (N.B.: when the startup coding invokes 'apply', it does so by COPYING
+    #   (N.B.: when the startup coding invokes 'applypref', it just COPIES
     #   'opts' into 'tmpopts' first - as such, transitions will NEVER exist.)
 
     # First we need an 'inversion' primitive to access meta-state values ...
@@ -4691,11 +4630,13 @@ proc apply {} {
     lappend keys showinline1 showinline2
 
     #   (then everything ELSE - alphabetically [a code reading convenience])
-    lappend  keys autocenter autoselect bytetag chgtag colorcbs  currtag \
-                  deltag diffcmd difftag editor fancyButtons filetypes \
-                  geometry ignoreEmptyLn inlinetag instag overlaptag \
-                  predomMrg showcbs showlineview showln showmap syncscroll \
-                  tabstops tagcbs tagln tagtext textopt tmpdir toolbarIcons
+    lappend  keys adjcdr autocenter autoselect bytetag chgtag \
+                  colorcbs currtag deltag diffcmd difftag editor \
+                  fancyButtons filetypes geometry ignoreEmptyLn \
+                  inlinetag instag mapchg mapdel mapins mapolp \
+                  overlaptag predomMrg showcbs showlineview showln \
+                  showmap syncscroll tabstops tagcbs tagln tagtext  \
+                  textopt tmpdir toolbarIcons
 
     # ... finally, init the flags we need to derive - and then GET TO IT!!
     set remark 0                   ;# started as: 'remark' will not be run,
@@ -4705,7 +4646,7 @@ proc apply {} {
             # What is transitioning ?
             switch $key {
                 "ignoreEmptyLn" {
-                    set redoDiff $key ;# defer this until "apply" termination
+                    set redoDiff $key ;# either transition (on/off) counts
                 }
                 "ignoreRegexLnopt" -
                 "ignoreblanksopt" {
@@ -4760,6 +4701,11 @@ proc apply {} {
                     } else { set inlActn "compute-inlines {}" }
                 }
 
+                "mapchg" -
+                "mapdel" -
+                "mapins" - 
+                "mapolp" {if {$g(mapheight) > 0} {set g(mapheight) -1}}
+
                 "chgtag"     -
                 "currtag"    -
                 "deltag"     -
@@ -4803,6 +4749,7 @@ proc apply {} {
     # Align, (show or hide) various data (Lnums, Cbars, etc.), and we are done
     reconfigure-toolbar
     do-show-Info
+    if {$g(mapheight) < 0} {map-resize} ;# in case colors changed
     do-show-map
     do-show-lineview
     update idletasks  ;# update all this BEFORE propagate is shut off !!
@@ -4816,10 +4763,8 @@ proc apply {} {
 # Save customization changes.
 ###############################################################################
 proc save {} {
+    global g pref tmpopts rcfile tcl_platform
     debug-info "save ()"
-    global g
-    global tmpopts rcfile tcl_platform
-    global pref
 
     if {[file exists $rcfile]} {
         file rename -force $rcfile "$rcfile~"
@@ -4867,8 +4812,7 @@ proc save {} {
 # Text has scrolled, update scrollbars and synchronize windows
 ###############################################################################
 proc hscroll-sync {id args} {
-    global g opts
-    global w
+    global g w opts
 
     # If ignore_hevent is true, we've already taken care of scrolling.
     # We're only interested in the first event.
@@ -4916,8 +4860,7 @@ proc hscroll-sync {id args} {
 # Text has scrolled, update scrollbars and synchronize OTHER Text window
 ###############################################################################
 proc vscroll-sync {id y0 y1} {
-    global g opts
-    global w
+    global g w opts
 
     if {$id == 1} {
         $w(LeftVSB) set $y0 $y1
@@ -4934,7 +4877,7 @@ proc vscroll-sync {id y0 y1} {
     # set the flag; this makes sure we only get called once
     set g(disableSyncing) 1
 
-    eval map-move-thumb $y0 $y1
+    map-move-thumb $y0 $y1
 
     # If syncing is turned on,
     #    select nearest visible diff region (if requested),
@@ -4950,7 +4893,7 @@ proc vscroll-sync {id y0 y1} {
                 # change the current diff region...
                 set topline [$w(RightText) index @0,0]
                 set bottomline [$w(RightText) index @0,10000]
-                foreach {s1} $g(scrInf,[hunk-id $i]) {break}
+                set s1 [lindex $g(scrInf,[hunk-id $i]) 0]
                 if {$s1 >= $topline && $s1 <= $bottomline} {
                     move $i 0 1
                 }
@@ -4975,10 +4918,7 @@ proc vscroll-sync {id y0 y1} {
 # Make a miniature map of the diff regions
 ###############################################################################
 proc create-map {name mapwidth mapheight} {
-    global g
-    global w
-    global map
-    global opts
+    global g w opts map
 
     set map $name
 
@@ -4993,7 +4933,7 @@ proc create-map {name mapwidth mapheight} {
 
     # Paint color stripes per type of every hunk
     foreach hID $g(diff) {
-        foreach {S E na na C1 na na C2} $g(scrInf,$hID) { }
+        lassign $g(scrInf,$hID) S E na na C1 na na C2
 
         set y [expr {int(($S - 1) * $factor) + $g(mapborder)}]
         set size [expr {round(($E - $S + 1) * $factor)}]
@@ -5028,8 +4968,7 @@ proc create-map {name mapwidth mapheight} {
 # Resize map to fit window size
 ###############################################################################
 proc map-resize {args} {
-    global g opts
-    global w
+    global g w opts
 
     set mapwidth [winfo width $w(map)]
     set g(mapborder) [expr {[$w(map) cget -borderwidth] + [$w(map) cget \
@@ -5059,8 +4998,7 @@ proc map-resize {args} {
 # Toggle showing the line comparison window
 ###############################################################################
 proc do-show-lineview {{showLineview {}}} {
-    global opts
-    global w
+    global w opts
 
     if {$showLineview != {}} {
         set opts(showlineview) $showLineview
@@ -5107,8 +5045,7 @@ proc do-show-inline {which {showInline {}}} {
 # Toggle showing map or not
 ###############################################################################
 proc do-show-map {{showMap {}}} {
-    global opts
-    global w
+    global w opts
 
     if {$showMap != {}} {
         set opts(showmap) $showMap
@@ -5125,8 +5062,7 @@ proc do-show-map {{showMap {}}} {
 # Find the diff INDEX nearest to SCREENLINE $line.
 ###############################################################################
 proc find-diff {line} {
-    global g
-    global w
+    global g w
 
     # Binary search for i'th hunk (by its 1st line) closest to $line
     for {set low 1; set high $g(count); set i [expr {($low + $high) / 2}]} \
@@ -5157,7 +5093,7 @@ proc find-diff {line} {
 proc diff-size {hID version} {
     global g
 
-    foreach {S E P(1) na na P(2)} $g(scrInf,$hID) {break}
+    lassign $g(scrInf,$hID) S E P(1) na na P(2)
 
     switch -- $version {
     1  -
@@ -5172,9 +5108,8 @@ proc diff-size {hID version} {
 # Toggle showing merge preview or not
 ###############################################################################
 proc do-show-merge {{showMerge ""}} {
+    global g w
     debug-info "do-show-merge ($showMerge)"
-    global g
-    global w
 
     if {$showMerge != ""} {
         set g(showmerge) $showMerge
@@ -5202,10 +5137,8 @@ proc do-show-merge {{showMerge ""}} {
 # Create Merge preview window
 ###############################################################################
 proc build-merge-preview {} {
+    global g w opts
     debug-info "build-merge-preview ()"
-    global opts
-    global w
-    global g
 
     set win [toplevel $w(merge)]
     set rx [winfo rootx .]
@@ -5286,10 +5219,10 @@ proc build-merge-preview {} {
     #    we NEED 'diffR' or 'diffL' as lowest precedence
     #    (whichever applies to the diff line in question).
     #    Its an encoding trick noting which SIDE contrib'ed a diff line.
-    eval $w(mergeText) configure $opts(textopt)
-    eval $w(mergeText) tag configure {diffL} $opts(difftag)
-    eval $w(mergeText) tag configure {diffR} $opts(difftag)
-    eval $w(mergeText) tag configure {currtag} $opts(currtag)
+    $w(mergeText) configure {*}$opts(textopt)
+    $w(mergeText) tag configure {diffL} {*}$opts(difftag)
+    $w(mergeText) tag configure {diffR} {*}$opts(difftag)
+    $w(mergeText) tag configure {currtag} {*}$opts(currtag)
     $w(mergeText) tag raise sel ;# Keep this on top
 
     # adjust the tabstops
@@ -5342,9 +5275,8 @@ proc merge-write-file {{andExit 0}} {
 # Optional arg allows adding/removing (ie. editting) hunk identifiers later on
 ###############################################################################
 proc merge-add-marks {{hIDS {}}} {
+    global g w
     debug-info "merge-add-marks ($hIDS)"
-    global g
-    global w
 
     # Mark ALL lines first, so inserting choices won't mess up line numbers.
     #   N.B> WHEN hIDS is supplied, it MUST be homogeneous: ALL or NONE can
@@ -5388,7 +5320,7 @@ proc merge-add-marks {{hIDS {}}} {
                     # to subtract the screen END Lnum of the PRIOR hunk ...
                     set O [lindex $g(scrInf,$prvHid) 1]
                     # ... it will all convert to the NEW hunk location
-                } else { foreach {S na na O} $g(scrInf,$hID) {break} }
+                } else { lassign $g(scrInf,$hID) S na na O }
 
                 # Set the NEW mark (and eventually fall thru to tagging)
                 $w(mergeText) mark set mark$hID [incr S -$O].0
@@ -5399,7 +5331,7 @@ proc merge-add-marks {{hIDS {}}} {
         }
     } else { ;# Do the entire Text (MUST BE in PURE LEFT context!!)
         foreach hID [set hIDS $g(diff)] {
-            foreach {S na na O} $g(scrInf,$hID) {break}
+            lassign $g(scrInf,$hID) S na na O
 
             $w(mergeText) mark set mark$hID [incr S -$O].0
             $w(mergeText) mark gravity mark$hID left
@@ -5434,8 +5366,7 @@ proc merge-add-marks {{hIDS {}}} {
 # newversion   (1, 2, 12, 21) new merge choice
 ###############################################################################
 proc merge-select-version {hID oldversion newversion} {
-    global g
-    global w
+    global g w
 
     catch {
         if {[set tot [diff-size $hID $oldversion]]} {
@@ -5518,8 +5449,7 @@ proc merge-select-version {hID oldversion newversion} {
 # Center the merge region in the merge window
 ###############################################################################
 proc merge-center {} {
-    global g
-    global w
+    global g w
 
     # bail if there are no diffs
     if {$g(count) == 0} {
@@ -5553,9 +5483,8 @@ proc merge-center {} {
 # newversion   1 or 2, new merge choice
 ###############################################################################
 proc do-merge-choice {newversion} {
+    global g w opts
     debug-info "do-merge-choice ($newversion)"
-    global g opts
-    global w
 
     set hID [hunk-id $g(pos)]
     $w(mergeText) configure -state normal
@@ -5639,14 +5568,13 @@ proc add-tag {wgt tag line start end} {
 # Returns the diff hunk identifier.
 ###############################################################################
 proc set-tag {hID newtag {oldtag ""} {setpos 0}} {
-    global g opts
-    global w
+    global g w opts
 
     # Figure out which lines we need to address...
     if {![info exists g(scrInf,$hID)]} {
         return ""
     }
-    foreach {S E na na cL na na cR} $g(scrInf,$hID) { }
+    lassign $g(scrInf,$hID) S E na na cL na na cR
 
     # Remove old tag
     if {"$oldtag" != ""} {
@@ -5748,8 +5676,8 @@ proc moveNearest {window mode args} {
 # this is called to decode a combobox entry into which hunk to jump to
 ###############################################################################
 proc moveTo {window value} {
-    global w
-    global g
+    global g w
+
     # we know that the value is prefixed by the number/index of
     # the diff the user wants. So, just grab that out of the string
     regexp {([0-9]+) *:} $value matchVar index
@@ -5760,8 +5688,7 @@ proc moveTo {window value} {
 # this is called when the user scrolls the map thumb interactively.
 ###############################################################################
 proc map-seek {y} {
-    global g
-    global w
+    global g w
 
     set yview [expr {(double($y) / double($g(mapheight)))}]
 
@@ -5775,9 +5702,8 @@ proc map-seek {y} {
 # Also accepts keywords "first" and "last"
 ###############################################################################
 proc move {value {relative 1} {setpos 1}} {
+    global g w
     debug-info "move ($value $relative $setpos)"
-    global g
-    global w
 
     if {$value == "first"} {
         set value 1
@@ -6017,7 +5943,7 @@ proc update-display {} {
         # existance and are ALWAYS in opposite states to each other
         if {[winfo exists $w(toolbar).mark$hID]} \
             { set tmp {C S} }   { set tmp {S C} }
-        foreach $tmp {normal disabled} { }
+        lassign {normal disabled} {*}$tmp 
         foreach buttonpref {im tx} {
             $w(markClear_$buttonpref) configure -state $C
             $w(markSet_$buttonpref) configure -state $S
@@ -6043,11 +5969,10 @@ proc update-display {} {
 # Center the top line of the CDR in each window.
 ###############################################################################
 proc center {} {
-    global g
-    global w
+    global g w
 
     if {! [info exists g(scrInf,[hunk-id $g(pos)])]} {return}
-    foreach {S E} $g(scrInf,[hunk-id $g(pos)]) {break}
+    lassign $g(scrInf,[hunk-id $g(pos)]) S E
 
     # Window requested height in pixels
     set opix [winfo reqheight $w(LeftText)]
@@ -6082,6 +6007,7 @@ proc center {} {
 ###############################################################################
 proc buttons {{newstate "normal"}} {
     global w
+
     $w(combo) configure -state $newstate
     foreach buttonpref {im tx} {
         $w(prevDiff_$buttonpref) configure -state $newstate
@@ -6096,8 +6022,8 @@ proc buttons {{newstate "normal"}} {
 # Wipe the slate clean...
 ###############################################################################
 proc wipe {} {
-    debug-info "wipe ()"
     global g
+    debug-info "wipe ()"
 
     # Short cicuit useless traces and key indexing lists
     if {$g(startPhase)} {set g(startPhase) 1}
@@ -6120,9 +6046,8 @@ proc wipe {} {
 # Wipe all data and all windows
 ###############################################################################
 proc wipe-window {} {
+    global g w
     debug-info "wipe-window ()"
-    global g
-    global w
 
     wipe
 
@@ -6183,7 +6108,7 @@ proc rngeSrch {rnge val {indirect {}}} {
 
         # Pick the FIRST midpoint and extract its values
         set i [expr {($LO + $HI)/2}]
-        foreach {low hgh} [lindex [subst $ithItem]]    {break}
+        lassign [lindex [subst $ithItem]] low hgh
 
         # Repetitively narrow the boundaries until we find it
         #   N.B> (extra expression ENSURES boundary ALWAYS moves)
@@ -6194,7 +6119,7 @@ proc rngeSrch {rnge val {indirect {}}} {
 
             # Pick NEW midpoint and try again
             set i [expr {($LO + $HI)/2}]
-            foreach {low hgh} [lindex [subst $ithItem]]    {break}
+            lassign [lindex [subst $ithItem]] low hgh
         }
     } else {return [incr max]}
     return $i
@@ -6211,6 +6136,7 @@ proc rngeSrch {rnge val {indirect {}}} {
 ###############################################################################
 proc chk-ancRnge {anclst S E {prev {}}} {
     global g
+
     if {![set result [llength $g($anclst)]]} {return 0}
     if {$prev != {}} {upvar $prev  ndx} ;# (Remember where NEXT call starts)
 
@@ -6223,8 +6149,7 @@ proc chk-ancRnge {anclst S E {prev {}}} {
 
     # Get values of first ancestor range to check
     #   (args S & E are expected to BE in min/max order)
-    foreach {s(0) e(0) result}     "$S $E 0"      {break}
-    foreach {s(1) e(1)} [lindex $g($anclst) $ndx] {break}
+    lassign "$S $E 0 [lindex $g($anclst) $ndx]" s(0) e(0) result s(1) e(1)
 
     # Check ancestral ranges until found (or is known it CANT be found)
     while {$s(1) <= $e(0)} {
@@ -6237,7 +6162,7 @@ proc chk-ancRnge {anclst S E {prev {}}} {
 
         # Step to next ancestor range (if one actually exists)
         if {$ndx < [llength $g($anclst)] - 1} {
-            foreach {s(1) e(1)} [lindex $g($anclst) [incr ndx]] {break}
+            lassign [lindex $g($anclst) [incr ndx]] s(1) e(1)
         } else {break}
     }
     # If result is true, then  $s($j)  and  [min $e($i) $e($j)]
@@ -6251,7 +6176,7 @@ proc chk-ancRnge {anclst S E {prev {}}} {
 #   N.B> Be very AWARE of when/why g(diff) .vs. g(DIFF) is used!!!
 ###############################################################################
 proc mark-diffs {{rmvrpl {}}} {
-    global opts w g
+    global g w opts
     debug-info "mark-diffs ()"
 
     set wdg(1) $w(LeftText)
@@ -6281,7 +6206,7 @@ proc mark-diffs {{rmvrpl {}}} {
                 }
 
                 # Only ONE side ever has Pad lines - remove them
-                foreach {na E Pl na na Pr} $g(scrInf,$d) {break}
+                lassign $g(scrInf,$d) na E Pl na na Pr
                 set S [incr E] ;# (shift range downward for Widget addressing)
                 if {$Pl} {lappend Lpad [incr S -$Pl].0 $E.0} ;# Left  Padding
                 if {$Pr} {lappend Rpad [incr S -$Pr].0 $E.0} ;# Right Padding
@@ -6306,8 +6231,8 @@ proc mark-diffs {{rmvrpl {}}} {
         # We MUST have deleted SOMETHING by now... ?
         if {$i} {
             # Must eliminate Padding all at once to avoid shifting the indices
-            if {[llength $Lpad]} {eval $w(LeftText)  delete $Lpad}
-            if {[llength $Rpad]} {eval $w(RightText) delete $Rpad}
+            if {[llength $Lpad]} {$w(LeftText)  delete {*}$Lpad}
+            if {[llength $Rpad]} {$w(RightText) delete {*}$Rpad}
 
             # ... finally overlay the NEW hIDs ... REPLACING what was deleted
             # N.B> 'i' begins as an "index+1" position against g(diff) ...
@@ -6345,7 +6270,7 @@ proc mark-diffs {{rmvrpl {}}} {
 
             # Get most of what we know of this hunk ...
             # ... derive its type and determine if we count it as a REAL hunk
-            foreach {S E Pl na Cl Pr Or Cr} $g(scrInf,$d) {break}
+            lassign $g(scrInf,$d) S E Pl na Cl Pr Or Cr
             if {[string is lower [set type [expr {"$Cl$Cr"=="" ? "I":"i"}]]]} {
                 incr g(count)
             }
@@ -6369,7 +6294,7 @@ proc mark-diffs {{rmvrpl {}}} {
 
         } elseif { [set result [extract $d]] != ""} {
         # Otherwise, its a NEW hunk needing to be processed
-            foreach {s(1) e(1) s(2) e(2) type} "$result" { }
+            lassign $result s(1) e(1) s(2) e(2) type
 
             # Count it ... but only NON-suppressed hunks count as REAL
             incr g(COUNT)
@@ -6531,9 +6456,8 @@ proc mark-diffs {{rmvrpl {}}} {
 # start a new diff from the popup dialog
 ###############################################################################
 proc do-new-diff {} {
+    global g finfo
     debug-info "do-new-diff ()"
-    global g
-    global finfo
 
     # Unlock the PRESENT mergefile settings (but leave name for now), then ...
     # Pop up the dialog to collect the args and form them together
@@ -6557,11 +6481,8 @@ proc do-new-diff {} {
 # Remark difference regions...
 ###############################################################################
 proc remark-diffs {} {
+    global g w pref opts
     debug-info "remark-diffs ()"
-    global g
-    global w
-    global opts
-    global pref
 
     if {$g(statusInfo) == ""} {show-status "Re-Marking differences..."}
     # Delete, then reconfigure ALL tags (based on the current options) ...
@@ -6590,8 +6511,8 @@ proc remark-diffs {} {
 
             } elseif {$win == $w(mergeText) && "$tag" == "diff"} {
                 # (difftag has already been validity checked by now)
-                eval $win tag configure ${tag}R $opts(${tag}tag)
-                eval $win tag configure ${tag}L $opts(${tag}tag)
+                $win tag configure ${tag}R {*}$opts(${tag}tag)
+                $win tag configure ${tag}L {*}$opts(${tag}tag)
             }
         }
     }
@@ -6629,11 +6550,10 @@ proc remark-diffs {} {
 # Update Skew correction on given hunk
 ###############################################################################
 proc de-skew-hunk {hID {reCfgSkew true}} {
-    global w
-    global g
+    global g w
 
     # Get screen difftag range (same for Left or Right)
-    foreach {s1 e1} $g(scrInf,$hID) {break}
+    lassign $g(scrInf,$hID) s1 e1
 
     # Force measurements to be REcalculated WITHOUT any PRIOR value
     if {$reCfgSkew} {
@@ -6668,8 +6588,7 @@ proc de-skew-hunk {hID {reCfgSkew true}} {
 # Add inline tags for a given SINGLE hunk to BOTH Text widgets
 ###############################################################################
 proc remark-inline {hID {reCfgSkew true}} {
-    global g
-    global w
+    global g w
     #debug-info "remark-inline ($hID)"
 
     # N.B> Oddly enough, it is legitimately POSSIBLE that ABSOLUTELY IDENTICAL
@@ -6689,7 +6608,7 @@ proc remark-inline {hID {reCfgSkew true}} {
         set wdg(r) "RightText"
 
         # Presumes 'inlinetag' was ALREADY removed from BOTH Text widgets
-        foreach {Lno} $g(scrInf,$hID) {break}
+        set Lno [lindex $g(scrInf,$hID) 0]
         foreach {side lndx Scol Ecol} $g(inline,$hID) {
             add-tag $w($wdg($side)) inlinetag [incr lndx $Lno] $Scol $Ecol
         }
@@ -6723,11 +6642,8 @@ proc debug-info {message {force 0}} {
 # Compute differences (start from the beginning, basically).
 ###############################################################################
 proc rediff {} {
+    global g w opts finfo
     debug-info "rediff ()"
-    global g
-    global opts
-    global finfo
-    global w
 
     buttons disabled
 
@@ -6742,8 +6658,8 @@ proc rediff {} {
         # has not yet been obtained -- go get it
         show-status "reading $finfo(lbl,$ndx) ..."
         if {![info exists finfo(pth,$ndx)]} {
+            # if it fails: finfo(pth,$ndx) will LIKELY be an empty tmpfile
             if {"" != [set msg [scm-chkget $ndx]]} {do-error "$msg"}
-            # finfo(pth,$ndx) is NOW most likely an empty tmpfile
         }
         if {[catch {set hndl [open "$finfo(pth,$ndx)" r]}]} {
             fatal-error "Failed to open file: $finfo(pth,$ndx)"
@@ -6940,8 +6856,8 @@ proc rediff {} {
 #   Prime example:  hung networks or simply unpredictable latency.
 ###############################################################################
 proc watch-cursor {{WHY {}} {delay 1250}} {
-    #debug-info "watch-cursor ($msg)"
     global w ASYNc
+    #debug-info "watch-cursor ($msg)"
 
     # Cant 'busy' out windows that arent't there yet ...
     if {[winfo exists w(LeftText)]} {
@@ -7001,8 +6917,8 @@ proc need-status {} {
 # Restore the X cursor for a window and all of its descendants.
 ###############################################################################
 proc restore-cursor {} {
-    #debug-info "restore-cursor"
     global w ASYNc
+    #debug-info "restore-cursor"
 
     if {[winfo exists w(LeftText)]} {
         . configure -cursor {}
@@ -7041,8 +6957,8 @@ proc check-error {result output} {
 # numerically speaking.
 ###############################################################################
 proc recompute-diff {} {
-    debug-info "recompute-diff ()"
     global g
+    debug-info "recompute-diff ()"
 
     set current $g(pos)
     debug-info "saving current position $g(pos)"
@@ -7057,9 +6973,8 @@ proc recompute-diff {} {
 # Wipe most everything and then kick off a rediff.
 ###############################################################################
 proc do-diff {} {
+    global g opts map errorInfo
     debug-info "do-diff ()"
-    global g map errorInfo
-    global opts
 
     wipe-window
     watch-cursor    ;# in case of delay from diff OR a maybe-slow SCM
@@ -7120,11 +7035,8 @@ proc hunk-ndx { id {lst diff}} {
 # Get things going...
 ###############################################################################
 proc main {} {
+    global g w opts ASYNc startupError errorInfo tk_version
     # debug-info "main" - No point... only works AFTER "commandline" runs
-    global g w opts ASYNc
-    global errorInfo
-    global startupError
-    global tk_version
 
     wm withdraw .
     wm protocol . WM_DELETE_WINDOW do-exit
@@ -7334,9 +7246,8 @@ proc centerWindow {w {size {}}} {
 # command line parser.
 ###############################################################################
 proc newDiffDialog {} {
+    global g w finfo opts pref waitvar
     debug-info "newDiffDialog"
-    global g w finfo opts pref
-    global waitvar
 
     set waitvar {}
     customize-initLabels ;# Needed for access to global 'pref' array
@@ -7364,41 +7275,53 @@ proc newDiffDialog {} {
 
         set simple [frame $w(newDiffPopup).simple -borderwidth 2 -relief groove]
 
-        label $simple.l1 -text "File 1:"
-        label $simple.l2 -text "File 2:"
+        label $simple.l1 -text "FSpec 1:"
+        label $simple.l2 -text "FSpec 2:"
         entry $simple.e1 -textvariable finfo(f,1)
         entry $simple.e2 -textvariable finfo(f,2)
-        set mrgopt [frame $simple.f3] ;# (pre-pack these into a SINGLE handle)
+        set mrgopt [frame $simple.f3] ;# pre-pack all this
           label $mrgopt.l3 -text "$pref(predomMrg):" -anchor w
           radiobutton $mrgopt.r1 -variable opts(predomMrg) -text Left  -value 1
           radiobutton $mrgopt.r2 -variable opts(predomMrg) -text Right -value 2
           pack $mrgopt.l3 $mrgopt.r1 $mrgopt.r2 -side left
 
-        # Rev labels will reflect when rev entry is non-null
-        label $simple.lr1 -text "-r"
-        label $simple.lr2 -text "-r"
-        entry $simple.er1 -textvariable finfo(rev,1) \
-            -validate key -vcmd {occupancy %W %P} 
-        entry $simple.er2 -textvariable finfo(rev,2) \
-            -validate key -vcmd {occupancy %W %P} 
-        $simple.er1 validate ;# N.B> wdg NAMES form the association
-        $simple.er2 validate ;#   (see 'occupancy' for details)
+        # Each revision label must reflect when its ENTRY is non-null
+        entry $simple.er1 -textvariable finfo(rev,1) -validate key \
+                      -vcmd [list occupancy [label $simple.lr1 -text "-r"] %P]
+        entry $simple.er2 -textvariable finfo(rev,2) -validate key \
+                      -vcmd [list occupancy [label $simple.lr2 -text "-r"] %P] 
+        $simple.er1 validate
+        $simple.er2 validate
 
         set w(newDiffPopup,entry1) $simple.e1
         set w(newDiffPopup,entry2) $simple.e2
 
-        # we want these buttons to be the same height as
-        # the entry, so we'll try to force the issue...
-        button $simple.b1 -borderwidth 1 -highlightthickness 0 \
-          -text "Browse..." -command [list newDiffBrowse "File 1" $simple.e1]
-        button $simple.b2 -borderwidth 1 -highlightthickness 0 \
-          -text "Browse..." -command [list newDiffBrowse "File 2" $simple.e2]
+        # We need the Browser buttons to fit the COMBINED height of BOTH the
+        # filename entry and revision fields, so pre-pack it into a subframe
+        set Brws1 [labelframe $simple.fB1 -text "Browse..."]
+            button $Brws1.bf -borderwidth 1 -highlightthickness 0 -image \
+                   txtfImg -command [list newDiffBrowse   "File"    $simple.e1]
+            button $Brws1.bd -borderwidth 1 -highlightthickness 0 -image \
+                   fldrImg -command [list newDiffBrowse "Directory" $simple.e1]
+            pack $Brws1.bf -padx {7 0} -pady {0 2} -side left
+            pack $Brws1.bd -padx {0 7} -pady {0 2} -side right
+            set_tooltips $Brws1.bf {"to a file"}
+            set_tooltips $Brws1.bd {"to a directory"}
 
+        set Brws2 [labelframe $simple.fB2 -text "Browse..."]
+            button $Brws2.bf -borderwidth 1 -highlightthickness 0 -image \
+                   txtfImg -command [list newDiffBrowse   "File"    $simple.e2]
+            button $Brws2.bd -borderwidth 1 -highlightthickness 0 -image \
+                   fldrImg -command [list newDiffBrowse "Directory" $simple.e2]
+            pack $Brws2.bf -padx {7 0} -pady {0 2} -side left
+            pack $Brws2.bd -padx {0 7} -pady {0 2} -side right
+            set_tooltips $Brws2.bf {"to a file"}
+            set_tooltips $Brws2.bd {"to a directory"}
 
         # we'll use the grid geometry manager to get things lined up right...
         grid $simple.l1 -row 0 -column 0 -sticky e
         grid $simple.e1 -row 0 -column 1 -columnspan 4 -sticky nsew -pady 4
-        grid $simple.b1 -row 0 -column 5 -sticky nsew -padx 4 -pady 4
+        grid $Brws1 -row 0 -column 5 -rowspan 2 -sticky nsew -padx 4 -pady 4
 
         grid $simple.lr1 -row 1 -column 2
         grid $simple.er1 -row 1 -column 3
@@ -7407,7 +7330,7 @@ proc newDiffDialog {} {
 
         grid $simple.l2 -row 2 -column 0 -sticky e
         grid $simple.e2 -row 2 -column 1 -columnspan 4 -sticky nsew -pady 4
-        grid $simple.b2 -row 2 -column 5 -sticky nsew -padx 4 -pady 4
+        grid $Brws2 -row 2 -column 5 -rowspan 2 -sticky nsew -padx 4 -pady 4
 
         grid $simple.f3 -row 4 -column 0 -columnspan 4 -sticky w -pady 4
 
@@ -7435,16 +7358,8 @@ proc newDiffDialog {} {
         set commands [frame $w(newDiffPopup).buttons]
 
         button $commands.ok -text "Ok" -width 5 -default active -command {
-            if {$g(mergefile) == ""} {
-                set g(mergefileset) 0
-            } else {
-                set g(mergefileset) 1
-            }
-            if {$g(ancfile) == ""} {
-                set g(ancfileset) 0
-            } else {
-                set g(ancfileset) 1
-            }
+            set g(mergefileset) [expr {$g(mergefile) != ""}]
+            set g(ancfileset)   [expr {$g(ancfile) != ""}]
             set waitvar 1
         }
         button $commands.cancel -text "Cancel" -width 5 -default normal \
@@ -7469,6 +7384,10 @@ proc newDiffDialog {} {
     } else {
         debug-info " $w(newDiffPopup) already exists, just centering"
         if {[winfo exists .client]} {
+            # but it SHOULD be a transient from now on (if it isnt already)
+            if {[wm transient $w(newDiffPopup)] == ""} {
+                wm transient $w(newDiffPopup) .
+            }
             centerWindow $w(newDiffPopup)
         }
         update
@@ -7482,11 +7401,8 @@ proc newDiffDialog {} {
 }
 
 proc occupancy {wdg newV} {
-    # Label widget to modify DERIVES from the entry widget being tracked
-    set wdg [string replace $wdg end-2 end-2 "l"]
-
-    # Basically, disables the LABEL when the ENTRY is empty ...
-    #   (provides GUI feedback when entry contains data (specifically BLANKS)
+    # Disables the LABEL (wdg) when the ENTRY value (newV) is empty ...
+    #   (simply a GUI feedback trick to discern an EMPTY field from BLANKS)
     if {[string length $newV]} {
         $wdg configure -state normal
     } else {
@@ -7523,8 +7439,7 @@ proc open-more-options {} {
 }
 
 proc close-more-options {} {
-    global w
-    global finfo
+    global g w finfo
 
     grid remove $w(newDiffPopup).options.ml
     grid remove $w(newDiffPopup).options.me
@@ -7548,52 +7463,69 @@ proc close-more-options {} {
 }
 
 ###############################################################################
-# File browser for the "New Diff" dialog
+# File/Directory browser for the "New Diff" dialog
 ###############################################################################
-proc newDiffBrowse {title widget} {
-    global w
-    global opts
+proc newDiffBrowse {type widget} {
+    global w opts
+    debug-info "newDiffBrowse($type $widget)"
 
-    debug-info "newDiffBrowse($title $widget)"
+    # Use TARGET widget name to locate OTHER widget field
     set n [string index $widget end]
     set widgroot [string range $widget 0 end-1]
-    if {$n == 1} { set other 2 } elseif { $n == 2} { set other 1 }
-    set entrystuff [$widget get]
-    debug-info "$n: entrystuff $entrystuff"
-    if {$entrystuff != ""} {
-      set initialdir [file dirname $entrystuff]
-    } else {
-      set otherentrystuff [${widgroot}$other get]
-      if {$otherentrystuff != ""} {
-        set initialdir [file dirname $otherentrystuff]
-      } else {
-        set initialdir [pwd]
-      }
-    }
-    debug-info "initialdir $initialdir"
-    set initialfile [file tail $entrystuff]
-    set filename [tk_getOpenFile -title $title \
+    set other([set other(2) 1]) 2
+
+    # Start from what is IN the target already
+    #   Basically we want each item to START browsing from where
+    #   the most recent request left off; that means (in order):
+    #      - the dirctory of where it is already
+    #      - the directory of where the OTHER entry is
+    #      - the current working directory
+    #   Note that the PRIOR use of EITHER item CAN itself BE a directory
+    if {[set entrystuff [$widget get]] != ""} {
+        if {![file isdirectory [set initdir $entrystuff]]} {
+            set initfil [file tail $initdir]
+            set initdir [file dirname $initdir]
+        } else {set initfil {}}
+
+    } elseif {[set entrystuff [${widgroot}$other($n) get]] != ""} {
+        if {![file isdirectory [set initdir $entrystuff]]} {
+            set initfil [file tail $initdir]
+            set initdir [file dirname $initdir]
+        } else {set initfil {}}
+
+    } else { set initdir [pwd]; set initfil {} }
+    debug-info "initdir($initdir) initfil($initfil)"
+
+    # What KIND of entry are we browsing to find ?
+    switch -glob $type {
+    "D*" { set chosen [tk_chooseDirectory -title "$type $n" \
+                        -parent $w(newDiffPopup) \
+                        -initialdir $initdir]
+        }
+    "F*" { set chosen [tk_getOpenFile -title "$type $n" \
+                        -parent $w(newDiffPopup)    \
       -filetypes $opts(filetypes) \
-      -initialfile $initialfile \
-      -initialdir $initialdir]
-    if {[string length $filename] > 0} {
+                        -initialfile $initfil       \
+                        -initialdir  $initdir]
+        }
+    }
+
+    # Send back what we got (inserted if successful)
+    if {[string length $chosen] > 0} {
         $widget delete 0 end
-        $widget insert 0 $filename
+        $widget insert 0 $chosen
         $widget selection range 0 end
         $widget xview end
         focus $widget
-        return $filename
-    } else {
-        after idle {raise $w(newDiffPopup)}
-        return {}
-    }
+    } else { after idle {raise $w(newDiffPopup)} }
+    return $chosen
 }
 
 ###############################################################################
 # Split or Combine Dialog (modal): adjust CDR bounds & form EQUIVALENT diff(s)
 ###############################################################################
 proc splcmb-Dialog {Combine} {
-    global splcmb opts g w
+    global g w opts splcmb
 
     # (If first time invoked) ... Construct the Dialog window itself)
     if {! [winfo exists $w(scDialog)]} {
@@ -7606,8 +7538,8 @@ proc splcmb-Dialog {Combine} {
         set lbl(lu) "Upper Edge"       ;# (both EDGE labels go in col 2)
         set lbl(ll) "Lower Edge"       ;#
         #   (Button columns are designed as VERTICALLY-OPPOSED pairings)
-        foreach {col(luu) col(lld)   col(lud) col(llu)   col(rud) col(rlu) \
-                 col(ruu) col(rld) }     { 0 0  1 1  3 3  4 4}     { }
+        lassign { 0 0  1 1  3 3  4 4}  col(luu) col(lld)   col(lud) col(llu) \
+                                       col(rud) col(rlu)   col(ruu) col(rld)
 
         # Now start building the dialog
         toplevel $w(scDialog)
@@ -7669,18 +7601,18 @@ proc splcmb-Dialog {Combine} {
         $w(scDialog).done configure -text "Combine"
         $w(scDialog).msg configure -text \
                              "Use buttons to EXPAND the current diff region"
-        foreach {inward outward} {disable normal} { } ;# cmbin btns init state
+        lassign {disable normal} inward outward ;# cmbin btns init state
     } else {
         $w(scDialog).done configure -text "Split"
         $w(scDialog).msg configure -text \
                              "Use buttons to REDUCE the current diff region"
-        foreach {inward outward} {normal disable} { } ;# split btns init state
+        lassign {normal disable} inward outward ;# split btns init state
     }
     foreach {b} {luu ruu lld rld} {$BtnFr.$b configure -state $outward}
     foreach {b} {lud rud llu rlu} {$BtnFr.$b configure -state $inward}
 
     # Identify the target CDR, its Line info (and extract its type)
-    foreach {S E Pl Ol na Pr Or} $g(scrInf,[set hID [hunk-id $g(pos)]]) {break}
+    lassign $g(scrInf,[set hID [hunk-id $g(pos)]]) S E Pl Ol na Pr Or
     regexp {[0-9,]*([acd])[0-9,]*} $hID na CDRtyp
 
     # # # # # # # # # # # # # # # # # # # # #
@@ -7711,7 +7643,7 @@ proc splcmb-Dialog {Combine} {
 
             if {$nS == [lindex $g(scrInf,$nhID) 1] + 1} {
                 # Subsume this hunk (it abuts the CDR leading edge)
-                foreach {nS tE tPl tOl na tPr tOr} $g(scrInf,$nhID) {break}
+                lassign $g(scrInf,$nhID) nS tE tPl tOl na tPr tOr
                 set splcmb(rnge) [linsert $splcmb(rnge) 0 \
                                      [list $nS $tE $tPl $tOl $tPr $tOr $nhID]]
                 if {$tPl} {set splcmb(jl) [linsert $splcmb(jl) 0 \
@@ -7726,7 +7658,7 @@ proc splcmb-Dialog {Combine} {
 
             if {$nE == [lindex $g(scrInf,$nhID) 0] - 1} {
                 # Subsume this hunk (it abuts the CDR trailing edge)
-                foreach {tS nE tPl tOl na tPr tOr} $g(scrInf,$nhID) {break}
+                lassign $g(scrInf,$nhID) tS nE tPl tOl na tPr tOr
                 lappend splcmb(rnge)  [list $tS $nE $tPl $tOl $tPr $tOr $nhID]
                 if {$tPl} {lappend splcmb(jl) [expr {$nE-$tPl+1}] $nE}
                 if {$tPr} {lappend splcmb(jr) [expr {$nE-$tPr+1}] $nE}
@@ -7755,7 +7687,7 @@ proc splcmb-Dialog {Combine} {
     #   (semantic indices refer to   SIDE and EDGE   pairings)
     # Note that the RELATIONSHIP of these MOVABLE edges to the 'hard limit'
     # EDGES (defined next) WILL DEPEND on the "Split" .vs. "Combine" mode
-    foreach {splcmb(lu) splcmb(ll) splcmb(ru) splcmb(rl)}  "$S $E $S $E"  { }
+    lassign "$S $E $S $E" splcmb(lu) splcmb(ll) splcmb(ru) splcmb(rl)
     incr splcmb(ll)  ;# Txt-wdg require 'lower' edge specs be 1 lower
     incr splcmb(rl)
 
@@ -7765,7 +7697,7 @@ proc splcmb-Dialog {Combine} {
     #       NOTE: this will LATER REQUIRE a mode-specific reverse-mapping
     #   conversion (in "splcmb-adj") that can mirror the distinct edge VALUE
     #   REARRANGEMENT being done here (would've been easy if Tcl had pointers!)
-    foreach {splcmb(ou) splcmb(iu) splcmb(il) splcmb(ol)} "$nS $S $E $nE" { }
+    lassign "$nS $S $E $nE" splcmb(ou) splcmb(iu) splcmb(il) splcmb(ol)
     incr splcmb(ol)  ;# As before, lower bnds must be BELOW range (for Txt-wdg)
     incr splcmb(il)
     
@@ -7828,7 +7760,7 @@ proc splcmb-Dialog {Combine} {
             lappend rnge $thID
 
             # Realign Numbering to FIRST involved hunk (to init LN(l/r) below)
-            if {[llength $rnge]==1}  { foreach {S Ol Or} "$tS $tOl $tOr" { } }
+            if {[llength $rnge]==1}  { lassign "$tS $tOl $tOr" S Ol Or }
 
             # Rewrite (promote) the CDR type UNLESS they will ALL agree
             if {"$CDRtyp" != "c" && "$thID" != \
@@ -7918,8 +7850,7 @@ proc splcmb-Dialog {Combine} {
 # Split/Combine Dialog button callback: perform edge movement (and update UI)
 ###############################################################################
 proc splcmb-adj {side edge btn} {
-    global splcmb
-    global w
+    global w splcmb
 
     # Only PERMITTED actions can invoke us, so NO CHECKs are EVER reqd
     #   (buttons are enabled/disabled as needed per invocation)
@@ -7930,9 +7861,9 @@ proc splcmb-adj {side edge btn} {
     # Many are basically just 'inverse mappings' indexed by an EDGE or a BTN,
     # (or a +/- 'btn' move defn). "push" (a <Split-only> predicate) says WHEN
     # colocated edges MUST move together and is indexed by an EDGE plus a BTN
-    foreach {push(ud) push(lu) push(uu) push(ld)     otherS(l) otherS(r)   \
-             otherE(u) otherE(l)   otherB(u) otherB(d)   mvEg(d) mvEg(u) } \
-             { 1 1 0 0     r l   l u    d u      1  -1 }   { }
+    lassign { 1 1 0 0     1  -1     r l   l u   d u }                     \
+            push(ud) push(lu) push(uu) push(ld)          mvEg(d) mvEg(u)  \
+            otherS(l) otherS(r)   otherE(u) otherE(l)   otherB(u) otherB(d)
 
     # Recover the semantic MODE we are operating under (because we can't PASS
     # its value from a widget cmd), then use it to create a CONTEXT-SPECIFIC
@@ -8022,8 +7953,7 @@ proc splcmb-adj {side edge btn} {
 # Interpret, display and produce a data mapping of the CURRENT moved-edge state
 ###############################################################################
 proc splcmb-Feedback {Combine} {
-    global splcmb
-    global g w
+    global g w splcmb
 
     # Begin by UNtagging all Split/Combine highlighting from affected area
     foreach wdg "$w(LeftText) $w(RightText)" {
@@ -8040,7 +7970,7 @@ proc splcmb-Feedback {Combine} {
         #   (remember to discount the +1 of the lower edges when comparing)
         set upper [set lower 0]
         foreach hunk $splcmb(rnge) {
-            foreach {S E na na na na hID} $hunk {break}
+            lassign $hunk S E na na na na hID
             if {($splcmb(lu)   > $E && $splcmb(ru)   > $E) \
             ||  ($splcmb(ll)-1 < $S && $splcmb(rl)-1 < $S)} {continue}
 
@@ -8051,12 +7981,12 @@ proc splcmb-Feedback {Combine} {
             if {!$upper}     {set upper $S; set typ(u) $type}
             if {$E > $upper} {set lower $E; set typ(l) $type; incr lower}
         }
-    } else { foreach {upper lower} "$splcmb(ou) $splcmb(ol)" { } }
+    } else { lassign "$splcmb(ou) $splcmb(ol)" upper lower }
 
     # Now, arrange ALL edges (working and limits) as 3 top-to-btm
     # sub-regions, noting which HAS any content (per sub-region, per side).
     foreach LR {l r} {
-        foreach "splcmb(${LR}1) splcmb(${LR}2) splcmb(${LR}3)" "0 1 0" { }
+        lassign {0 1 0} splcmb(${LR}1) splcmb(${LR}2) splcmb(${LR}3)
         set splcmb(${LR}1)  [expr \
                    {[set t(1$LR) $upper] < [set b(1$LR) $splcmb(${LR}u)]}]
 
@@ -8126,7 +8056,7 @@ proc splcmb-chk {what {pos 0}} {
             # Is dependant on there being MORE than 1 line on EITHER side
             # N.B> this PREVENTS splitting ANY one-line hunk (incl. "chg"-type)
             if {$pos <= $g(count) && $g(count) > 0} {
-                foreach {S E Pl na na Pr} $g(scrInf,[hunk-id $pos]) {break}
+                lassign $g(scrInf,[hunk-id $pos]) S E Pl na na Pr
                 return [expr {($E - $S) || ($Pl + $Pr > 1)}]
             }
         }
@@ -8136,7 +8066,7 @@ proc splcmb-chk {what {pos 0}} {
             if {$pos <= $g(count) && $g(count) > 1} {
 
                 # Grab edge values of the target CDR at 'pos'
-                foreach {S E} $g(scrInf,[hunk-id $pos]) {break}
+                lassign $g(scrInf,[hunk-id $pos]) S E
 
                 # Validate and check BELOW target first, then ABOVE - and exit ASAP
                 if {[incr pos -1]} {
@@ -8180,7 +8110,7 @@ proc splcmb-chk {what {pos 0}} {
 # all the code to handle the report writing dialog.
 ###############################################################################
 proc write-report {command args} {
-    global g w opts report finfo
+    global g w opts finfo report
 
     set w(reportPopup) .reportPopup
     switch -- $command {
@@ -8239,11 +8169,11 @@ proc write-report {command args} {
             #
             # First, initialize and get the counts of various quantities ...
             lappend F S E P(Left) O(Left) C(Left) P(Right) O(Right) C(Right)
-            foreach $F    { 0 0 0 0 "" 0 0 "" }      { }
+            lassign { 0 0 0 0 "" 0 0 "" }  {*}$F
             set aCnt [set dCnt [set cCnt [set modLft 0]]]
             set aTot [set dTot [set cTot [set modRgt 0]]]
             foreach hID $g(diff) {
-                foreach $F $g(scrInf,$hID) { }
+                lassign $g(scrInf,$hID) {*}$F
 
                 switch -- "[append C(Left) $C(Right)]" {
                 "+"  { incr aCnt ; incr aTot $P(Left)  ; incr modRgt $P(Left) }
@@ -8276,7 +8206,7 @@ proc write-report {command args} {
             #   ("H", "skpH" & "pfxH" just track the hunk 'ndx' for use later)
             # N.B. code DETECTs & INTERPOLATEs further hunks AS lines advance
             if {$g(COUNT) > [set i [set skpH [set pfxH [set H 0]]]]} {
-                    foreach $F $g(scrInf,[set hID [hunk-id [incr H] DIFF]]) { }
+                    lassign $g(scrInf,[set hID [hunk-id [incr H] DIFF]]) {*}$F 
                 if {[info exists g(overlap$hID)]}     {
                     set C(Left) [set C(Right) "?"]} \
                 elseif {"$C(Left)$C(Right)" == ""}    {
@@ -8306,7 +8236,7 @@ proc write-report {command args} {
                                 if {$H < $g(COUNT)} {
                                     # Step forward to the NEXT hunk mapping
                                     set hID [hunk-id [incr H] DIFF]
-                                    foreach $F $g(scrInf,$hID) {}
+                                    lassign $g(scrInf,$hID) {*}$F
                                     if {[info exists g(overlap$hID)]}  {
                                                set C(Left) [set C(Right) ?]} \
                                     elseif {"$C(Left)$C(Right)" == ""} {
@@ -8559,8 +8489,8 @@ You should have received a copy of the GNU General Public License along with\
 # Throw up a "command line usage" window.
 ###############################################################################
 proc do-usage {mode} {
-    debug-info "do-usage ($mode)"
     global g
+    debug-info "do-usage ($mode)"
 
     set usage {
     $g(name) may be started in any of the following ways:
@@ -8615,19 +8545,18 @@ Generally speaking, a diff is a <itl>directed</itl> comparison of two text\
 
 In the first form, $g(name) will generally present a dialog to allow you to\
       choose the files to diff interactively (providing a detected SCM does\
-      NOT provide a default comparison list). At present this dialog only\
-      supports a diff between files that already exist or can be obtained by\
-      a recognized SCM (see below). Specifically it does not permit the third\
-      form (described shortly), nor is it possible to <itl>directly</itl>\
-      "Browse" to a directory for either <cmp>FILESPEC</cmp>. However, if you\
-      really need a directory, try browsing to some file in the desired\
-      directory, accept THAT, then just erase the filename from the end of the\
-      dialog entry box where it is deposited (or just type it yourself).
+      NOT produce a default comparison list). At present this dialog only\
+      supports a diff between files or directories that already exist or can\
+      be obtained by a recognized SCM (see below). Specifically it does not\
+      permit the third form (described shortly), nor "Browsing" to a URL for\
+      either <cmp>FILESPEC</cmp>. However, you may always <itl>type</itl>\
+      anything that makes sense, be it URL, file path, or directory path or\
+      simply "Browse" to <itl>either</itl> files or directories.
       Please note that <itl>most</itl> of the "Additional Optional parameters"\
       <itl>are available</itl> from the dialog, but are initially hidden from\
       view, as they are often not applicable except in special cases. If you\
       need to set them, <bld>do not</bld> re-"hide" them before clicking the\
-      <btn>Ok</btn> button on the dialog as hiding them <itl>ALSO</itl> causes\
+      <btn>OK</btn> button on the dialog as hiding them <itl>ALSO</itl> causes\
       them ALL to become completely <bld>unset</bld>. Any items not provided\
       on that dialog ('Ignore...' settings) are presented elsewhere in $g(name).
 
@@ -8636,7 +8565,7 @@ In the second form, either or both <cmp>FILESPEC</cmp>s may be to a local file\
       only its contained FILES sharing a common name will be paired together,\
       one from each original <cmp>FILESPEC</cmp>. Note that this <itl>CAN</itl>\
       produce multiple pairs of files to be diffed (if both were directories).\
-      $g(name) remembers all of them, and permits switching to them later.
+      $g(name) remembers all of them, and permits switching among them later.
 
 In the third form, a single <cmp>FILE</cmp> containing "conflict markers" will\
       be split into two temporary files and used as ordinary input by $g(name).\
@@ -8644,9 +8573,11 @@ In the third form, a single <cmp>FILE</cmp> containing "conflict markers" will\
       "<cmp>cvs</cmp>", or "<cmp>vmrg</cmp>" and perhaps others.
 
 The fourth form is conditional on $g(name) being able to detect a viable SCM\
-      system (see below). However, make note that if it <itl>DOES</itl>, it may\
-      effectively override the first form described earlier when invoked with\
-      no arguments as is syntactically shown here.
+      system (see below). However, make note that if it <itl>DOES</itl>, it\
+      <bld>may</bld> effectively override the first form described earlier\
+      (i.e. interactive startup). Presently only the "Git" or "Subversion" SCM\
+      systems will behave this way, when invoked with no arguments as is\
+      syntactically suggested here.
 
 <hdr>Source Code Control</hdr>
 In all the SCM forms, $g(name) will detect which SCM system to utilize. This\
@@ -8845,9 +8776,9 @@ Note in each case, the quoting of BOTH the flag and its value\
       any flags being passed to the engine, nor if they might legitimately\
       require a value, or need said value to be separated from its flag while\
       still <itl>preserving</itl> any embedded blanks.
-      IMPORTANT NOTE - this particular GNU Diff option should\
-      <bld>never</bld> be passed to <bld>ANY</bld> diff engine ... it was\
-      designed to make the <itl>direct output of Diff itself</itl>\
+      IMPORTANT NOTE - from a $g(name) perspective, this particular GNU Diff\
+      option should <bld>never</bld> be passed to <bld>ANY</bld> diff engine\
+      ... it was designed to make the <itl>direct output of Diff itself</itl>\
       more meaningful to a <itl>human</itl> by simply suppressing what is,\
       in reality, actual differences. $g(name) <itl>will fail badly</itl> if\
       you were to sneak the option to Diff (using its long-form flag name).\
@@ -9301,8 +9232,7 @@ Or directly into the Discussion forum at
 # display help on the preferences
 ######################################################################
 proc do-help-preferences {} {
-    global g
-    global pref
+    global g pref
 
     customize-initLabels
 
@@ -9826,11 +9756,8 @@ proc purge-all-tags {w start end} {
 
 # Open one of the diffed files in an editor if possible
 proc do-edit {} {
+    global g w opts finfo
     debug-info "do-edit ()"
-    global g
-    global opts
-    global finfo
-    global w
 
     # Locate the correct filename
     set ndx [expr {$finfo(fCurpair) * 2}]
@@ -9842,7 +9769,7 @@ proc do-edit {} {
         # Got the file - GET the line number
         set file "$finfo(pth,$ndx)"
         if {$g(count)} {
-            foreach {line na na O(1) na na O(0)} $g(scrInf,$g(currdiff)) {break}
+            lassign $g(scrInf,$g(currdiff)) line na na O(1) na na O(0)
             incr line -$O([expr {int($ndx & 1)}])
         } else {set line 1} ;# have to pick something if no CDR exists
 
@@ -9873,8 +9800,8 @@ proc setAquaDialogStyle {toplevel} {
 # 22Jun2018 mpm - now accepts (opt.) line number to display (dflt = 1)
 ##########################################################################
 proc simpleEd {command args} {
-    debug-info "simpleEd ($command $args)"
     global textfont
+    debug-info "simpleEd ($command $args)"
 
     switch -- $command {
     open {
@@ -12218,7 +12145,7 @@ CgCjNN8888s7Lz0ATtijhD/RQy/9883TA4U2svzjCPLhUGH++einnz4sl4ji
 yw6B+KP+/OF8LypRbWgiBjwKVPOJaA+5Ay4yAcACGhAiAQEAOw==
 }
 
-image create photo findImage -format gif -data {
+image create photo findImg -format gif -data {
 R0lGODdhFAAUAPf/AAAAAIAAAACAAICAAAAAgIAAgACAgMDAwMDcwKbK8P/w1P/isf/Ujv/G
 a/+4SP+qJf+qANySALl6AJZiAHNKAFAyAP/j1P/Hsf+rjv+Pa/9zSP9XJf9VANxJALk9AJYx
 AHMlAFAZAP/U1P+xsf+Ojv9ra/9ISP8lJf4AANwAALkAAJYAAHMAAFAAAP/U4/+xx/+Oq/9r
@@ -12240,7 +12167,7 @@ Zs8OrDgzJ1uTRVnSYzcO5M8AQeu6I0oQ5DukAOAJlglPJVR5gBMifNjUqTyoAM6NK1f1auTJ
 YDuuOxdTKM/NneGFHVkRLEKKE0GeFGzRdODWMhd7Xipb6FKDuAsGBAA7
 }
 
-image create photo centerDiffsImage -format gif -data {
+image create photo centerDiffsImg -format gif -data {
 R0lGODlhFAAUAPcAAAAAAIAAAACAAICAAAAAgIAAgACAgMDAwMDcwKbK8P/w1P/isf/Ujv/G
 a/+4SP+qJf+qANySALl6AJZiAHNKAFAyAP/j1P/Hsf+rjv+Pa/9zSP9XJf9VANxJALk9AJYx
 AHMlAFAZAP/U1P+xsf+Ojv9ra/9ISP8lJf4AANwAALkAAJYAAHMAAFAAAP/U4/+xx/+Oq/9r
@@ -12261,7 +12188,7 @@ Nj+GJAkg0caNiU6q/DjToE9DQWW6rNkxUdCcBneONHhy5FCDM106zErzo82vB3XuTEm27Equ
 aJd6BQsVpFSRZcmeTYuWKduM7hpW3Lv33MK/gAUGBAA7
 }
 
-image create photo firstDiffImage -format gif -data {
+image create photo firstDiffImg -format gif -data {
 R0lGODlhFAAUAPcAAAAAAIAAAACAAICAAAAAgIAAgACAgMDAwMDcwKbK8P/w1P/isf/Ujv/G
 a/+4SP+qJf+qANySALl6AJZiAHNKAFAyAP/j1P/Hsf+rjv+Pa/9zSP9XJf9VANxJALk9AJYx
 AHMlAFAZAP/U1P+xsf+Ojv9ra/9ISP8lJf4AANwAALkAAJYAAHMAAFAAAP/U4/+xx/+Oq/9r
@@ -12282,7 +12209,7 @@ AVgS+neo5kuVOv9J7Gkzpc5BFIn+XHg06SGlN1fKbDlTYiKqRRmWNFnV0FWTS7XqtGoz6six
 XrMClRkxbdizbMm+jQngUKK7ao1OxTo3JliTZgUGBAA7
 }
 
-image create photo prevDiffImage -format gif -data {
+image create photo prevDiffImg -format gif -data {
 R0lGODdhFAAUAPf/AAAAAIAAAACAAICAAAAAgIAAgACAgMDAwMDcwKbK8P/w1P/isf/Ujv/G
 a/+4SP+qJf+qANySALl6AJZiAHNKAFAyAP/j1P/Hsf+rjv+Pa/9zSP9XJf9VANxJALk9AJYx
 AHMlAFAZAP/U1P+xsf+Ojv9ra/9ISP8lJf4AANwAALkAAJYAAHMAAFAAAP/U4/+xx/+Oq/9r
@@ -12303,7 +12230,7 @@ Kxei3JjT406VMH06BECUaFCWGXsilfkP51GCKGnWdGryY9GUE4s+xfiT47mqCrsq1SmT51ao
 ZYGCDevwUKK3Y8k2PLg2IAA7
 }
 
-image create photo nextDiffImage -format gif -data {
+image create photo nextDiffImg -format gif -data {
 R0lGODdhFAAUAPf/AAAAAIAAAACAAICAAAAAgIAAgACAgMDAwMDcwKbK8P/w1P/isf/Ujv/G
 a/+4SP+qJf+qANySALl6AJZiAHNKAFAyAP/j1P/Hsf+rjv+Pa/9zSP9XJf9VANxJALk9AJYx
 AHMlAFAZAP/U1P+xsf+Ojv9ra/9ISP8lJf4AANwAALkAAJYAAHMAAFAAAP/U4/+xx/+Oq/9r
@@ -12324,7 +12251,7 @@ FGnWtDmSoseLGSFC3DizJMaiNE2uRLrQ5U2mQFNCJYhRak6dPHH+vGjQ4VOETasWEmrokFmO
 V6OOLYt2a1iHbXWGTbswIAA7
 }
 
-image create photo lastDiffImage -format gif -data {
+image create photo lastDiffImg -format gif -data {
 R0lGODlhFAAUAPcAAAAAAIAAAACAAICAAAAAgIAAgACAgMDAwMDcwKbK8P/w1P/isf/Ujv/G
 a/+4SP+qJf+qANySALl6AJZiAHNKAFAyAP/j1P/Hsf+rjv+Pa/9zSP9XJf9VANxJALk9AJYx
 AHMlAFAZAP/U1P+xsf+Ojv9ra/9ISP8lJf4AANwAALkAAJYAAHMAAFAAAP/U4/+xx/+Oq/9r
@@ -12345,7 +12272,7 @@ BgG8VGnwZsuHOmtCvHmyEEiQh5IqiumRkNGjh5auXFgUqVSfTQtFZSrT5VWWHrmCFVhwakl3
 9dKqXZvW3cR6F18enVvv7b+5eEHWXYiWrV+3AgMCADs=
 }
 
-image create photo rediffImage -format gif -data {
+image create photo rediffImg -format gif -data {
 R0lGODdhFAAUAPf/AAAAAIAAAACAAICAAAAAgIAAgACAgMDAwMDcwKbK8P/w1P/isf/Ujv/G
 a/+4SP+qJf+qANySALl6AJZiAHNKAFAyAP/j1P/Hsf+rjv+Pa/9zSP9XJf9VANxJALk9AJYx
 AHMlAFAZAP/U1P+xsf+Ojv9ra/9ISP8lJf4AANwAALkAAJYAAHMAAFAAAP/U4/+xx/+Oq/9r
@@ -12366,7 +12293,7 @@ ABpS/Bgg3cmUQIOqBHBxIUpYADYKLEqUp8ynUKMatFgy5LmrWEdOrDoQIcuvrnSWPJfQqFCg
 YhPCAtqrrduUL8/9fIWUJs2LQ2EGmFt34MWmBNPdvKlUquEAAQEAOw==
 }
 
-image create photo markSetImage -format gif -data {
+image create photo markSetImg -format gif -data {
 R0lGODlhFAAUAPcAAAAAAIAAAACAAICAAAAAgIAAgACAgMDAwMDcwKbK8P/w1Pjisd/UjtHJ
 a8O4SL2qJcWqAK+SAJN6AGJiAEpKADIyAP/j1P/Hsf+rjv+Pa/9zSP9XJf9VANxJALk9AJYx
 AHMlAFAZAP/U1P+xsf+Ojv9ra/9ISP8lJf4AANwAALkAAJYAAHMAAFAAAP/U4/+xx/+Oq/9r
@@ -12387,7 +12314,7 @@ LV/GOpkSIqybOF3ClPlQIEShMF/lfLVzAcqPRhsKXRqTY1GCFaUy1ckTKkiRGhtapTkxa82u
 ExUSJZs2qtOUbQ2ujTsQ4luvbdXNpRtA712+UeEC7ou3YEAAADt=
 }
 
-image create photo markClearImage -format gif -data {
+image create photo markClearImg -format gif -data {
 R0lGODlhFAAUAPcAAAAAAIAAAACAAICAAAAAgIAAgACAgMDAwMDcwKbK8P/w1Pjisd/UjtHJ
 a8O4SL2qJcWqAK+SAJN6AGJiAEpKADIyAP/j1P/Hsf+rjv+Pa/9zSP9XJf9VANxJALk9AJYx
 AHMlAFAZAP/U1P+xsf+Ojv9ra/9ISP8lJf4AANwAALkAAJYAAHMAAFAAAP/U4/+xx/+Oq/9r
@@ -12409,7 +12336,7 @@ RRsuzYpWrVaoHMsujYgVKMOPUYkCWPCQbY2iP/UuiACgr9S0NDvulQBAXd+7ZYv6bPowLdmB
 By8LDAgAOw==
 }
 
-image create photo mergeChoice1Image -format gif -data {
+image create photo mergeChoice1Img -format gif -data {
 R0lGODdhFAAUAPf/AAAAAIAAAACAAICAAAAAgIAAgACAgMDAwMDcwKbK8P/w1P/isf/Ujv/G
 a/+4SP+qJf+qANySALl6AJZiAHNKAFAyAP/j1P/Hsf+rjv+Pa/9zSP9XJf9VANxJALk9AJYx
 AHMlAFAZAP/U1P+xsf+Ojv9ra/9ISP8lJf4AANwAALkAAJYAAHMAAFAAAP/U4/+xx/+Oq/9r
@@ -12430,7 +12357,7 @@ hxrq3LkzEcWXIz+eG0qUqMujSJMixJg0AEyhRYuKVDjIUMqrMxUy5MnVkM+bAEgaOpSorNmz
 X6eSnGmzZkunCT825fh2btKAADt=
 }
 
-image create photo mergeChoice2Image -format gif -data {
+image create photo mergeChoice2Img -format gif -data {
 R0lGODdhFAAUAPf/AAAAAIAAAACAAICAAAAAgIAAgACAgMDAwMDcwKbK8P/w1P/isf/Ujv/G
 a/+4SP+qJf+qANySALl6AJZiAHNKAFAyAP/j1P/Hsf+rjv+Pa/9zSP9XJf9VANxJALk9AJYx
 AHMlAFAZAP/U1P+xsf+Ojv9ra/9ISP8lJf4AANwAALkAAJYAAHMAAFAAAP/U4/+xx/+Oq/9r
@@ -12451,7 +12378,7 @@ ARBGlMizJ8+VFgOcG0q0KEKWHV0qXcp0qUyYA4tKBVkxaU6UWAFMrIoR4SCfYCXe5AjgUKKz
 aNMeMgT0osyaNMsihfqxpNWmQ5s2DQgAOw==
 }
 
-image create photo mergeChoice12Image -format gif -data {
+image create photo mergeChoice12Img -format gif -data {
 R0lGODlhFAAUAPMHAAAAAAB6uQCS3CWq/0i4/47U/7Hi/////729vQAAAAAAAAAAAAAAAAAAAAAA
 AAAAACH5BAEAAAgALAAAAAAUABQAAAT+ECGEECgAIYQQggghhBBCCIFiAEQIIYQQQgghhCACxRAA
 AAAAAAABAAghUA4hpBRYSimllAEQAuVAQgghhBBCCCECAoRAGIQQQgghkBBCiAAIIRAGgUMIIYQQ
@@ -12461,7 +12388,7 @@ IYRAQgghhJARAEIACiGEEEIIIQYZMACEEAAAAAAAgACAMQJACCGEEEQIIYQQAiMAhCAPQgghhBBC
 CCEEQQAIIYQiADs=
 }
 
-image create photo mergeChoice21Image -format gif -data {
+image create photo mergeChoice21Img -format gif -data {
 R0lGODlhFAAUAPMHAAAAAAB6uQCS3CWq/0i4/47U/7Hi/////729vQAAAAAAAAAAAAAAAAAAAAAA
 AAAAACH5BAEAAAgALAAAAAAUABQAAAT+ECGEEEIIIYRAgQAhhBBCCCGEEEQIIWAKQAghBCAAAAAA
 AACAmAIBQgiBUUoppRRYCiHkFIAQAoJAQgghhBBCCDkFAoSAIIQQQgghkBBCRgAIASGEgEIIIYQY
@@ -12471,7 +12398,7 @@ IYRAQgghhBAiAEIIgjDIEEIIIYQQUAiAEEIgjAEAgAAAAAAAACGEEARhAIQQQgghhCAPQgghhEAA
 CCEEEUIIIYQiADs=
 }
 
-image create photo splitDiffImage -format gif -data {
+image create photo splitDiffImg -format gif -data {
 R0lGODlhFgAWALMAANnZ2ba2tkpKSp6enmJiYgAAAAC5AACWMQBQAP//////////////////
 /////////yH5BAEAAAAALAAAAAAWABYAAASKEMhJaRAD41G7DEQhipjXBYWhqoVgWmBxzEjB
 vUAQG/NRuy9diNercXTIJGHYOxR+gcFyOhURfYUQYTAYeUdXI4Cbk63O4Wyl22z3bB22uw2v
@@ -12479,14 +12406,26 @@ oHyIvL5pUFO6X158cGQ6XIeHIoNaR0lJXDI9fT84hpFFdUFRl1hAlTGYN5+cTp44Ul8lOBMZ
 rRsRADs=
 }
 
-image create photo cmbinDiffImage -format gif -data {
+image create photo cmbinDiffImg -format gif -data {
 R0lGODlhFgAWAKIAANnZ2ba2tkpKSgAAAJ6engC5AACWMQBQACH5BAEAAAAALAAAAAAWABYA
 AAOACLrcEGKQ4OqCowxBbcOFYUgeA4riUCqneGwm8QUZ+spXhCtE7cK5wUgw6YV+u0ckNGg2
 C8ehaSmCWqM3hhHF7ZK0wq54lFQODq6DuvvqXHpoZ5Or4XwiL2KgR9+4WT1JfCh1fw9lATR9
 dit7YVVAjRFcLytvYVmWLJN+mpcTAAkAOw==
 }
 
-image create photo nullImage
+image create photo fldrImg -format gif -data {
+R0lGODlhFAAWAKIAANnZ2QAAAP/MmZlmMzMzM////////////yH5BAEAAAAALAAAAAAUABYA
+AANUCLrc/tCFSWdUQeitQ8xcWFnYEG6miAlD67Yn64Hx2RJTXQ84raO83C8U9A1vwiGqpwQy
+m5oilCVlWU3YKwsHCLy+YAK3Ky6bzzjCYsSuqC/w+CMBADs=
+}
+
+image create photo txtfImg -format gif -data {
+R0lGODlhFAAWAKIAANnZ2TMzM////wAAAJmZmf///////////yH5BAEAAAAALAAAAAAUABYA
+AANYGLq88BAEQaudIb5pO88R11UiuI3XBXFD61JDEM8nCrtujbcW4RODmq3yC0puuxcFKBwS
+jaykUsA8OntQpPTZvFZF2un3iu1ul1kyuuv8Bn7wuE8WkdqNCQA7
+}
+
+image create photo nullImg
 
 image create bitmap resize -data {
     #define resize_width 14
@@ -12605,8 +12544,7 @@ proc internal_tooltips_PopDown {} {
 }
 
 proc get_gtk_params { } {
-    global w
-    global tk_version
+    global w tk_version
 
     if {! [llength [auto_execok xrdb]]} {
       return 0
@@ -12671,8 +12609,7 @@ proc get_gtk_params { } {
 }
 
 proc get_cde_params {} {
-    global tk_version
-    global w
+    global w tk_version
 
     # Set defaults for all the necessary things
     set bg [option get . background background]
