@@ -8267,9 +8267,9 @@ proc write-report {command args} {
 
             # Mention the file name(s) ... BOTH unless exactly one is OFF
             set not([set not(Right) Left]) Right
-            foreach {side lbl} {Left L Right R} {
+            foreach {side} {Left Right} {
                 if {$report(doSide$side) || !$report(doSide$not($side))} {
-                    puts $handle "File $side : \t$finfo(lbl,$lbl)"
+                    puts $handle "$side file : \t$finfo(lbl,$side)"
                 }
             }
 
