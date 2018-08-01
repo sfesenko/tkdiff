@@ -1,3 +1,15 @@
+4.3.5           (08/08/2018):
+     * New Diff Dialog now allows browsing for files OR directories
+     - additionally it and browsers now stack above each other properly
+     - and the ancestor file is permitted to extract from an SCM source
+     * Tool arguments now permit cross-branch SCM comparison specification
+     * 3way collisions now findable via toolbar dropdown list highlights
+     * Textwin labels now tooltip the name+modtime of any NON-temp file
+     * Fixed recent new color preference settings to "apply" correctly
+     * Crash fixed when 3way diff was active and Lnum+Chgbars are OFF
+     * Pre-startup latency msg feature now OFF (MacOS X only) fixes Crash
+     * Repaired Lnums,etc. to use CDR preference settings when appropriate
+    
 4.3.4           (07/21/2018):
      * Emergency Re-repair of the (V4.3.3) Merge content corruption issue
      - previous fix targeted a phantom cause (only fixed SOME cases)
