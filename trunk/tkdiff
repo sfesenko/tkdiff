@@ -1223,7 +1223,7 @@ proc scm-detect {fn} {
     ### cases are combo/subsets of others there is plenty of room for debate.
     if {[file isdirectory [file join $dnam CVS]]}          { return CVS
     } elseif {[is-repo-dir ".svn" $dnam]}                  { return SVN
-    } elseif {[is-repo-dir ".git" $dnam]}                  { return GIT
+    } elseif {[is-git-repository]}                         { return GIT
     } elseif {[regexp {://} $fn]}                          { return SVN
     } elseif {[sccs-is-bk]}                                { return BK
     } elseif {[file isdirectory [file join $dnam SCCS]]}   { return SCCS
@@ -6945,7 +6945,7 @@ proc rediff {} {
 #   Prime example:  hung networks or simply unpredictable latency.
 ###############################################################################
 proc watch-cursor {{WHY {}} {delay 1250}} {
-    global w ASYNc
+    global g w ASYNc
     #debug-info "watch-cursor ($msg)"
 
     # Cant 'busy' out windows that arent't there yet ...
