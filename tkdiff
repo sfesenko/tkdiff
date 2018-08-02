@@ -1958,10 +1958,10 @@ proc alignDecor {pairnum} {
         } else {set finfo(lbl,$LR) $finfo(lbl,$ndx($n))}
 
         if {![info exists finfo(tmp,$ndx($n))]} {
-            set    tipdata "$finfo(pth,$ndx($n))\n"
-            append tipdata "[clock format [file mtime $finfo(pth,$ndx($n))]]"
+            set    tipdata "{$finfo(pth,$ndx($n))\n"
+            append tipdata "[clock format [file mtime $finfo(pth,$ndx($n))]]}"
         } { set    tipdata {}}
-        set_tooltips $w(${LR}Label) "{$tipdata}"
+        set_tooltips $w(${LR}Label) "$tipdata"
     }
 
     # Unlock a preset mergefile name if the CURRENT pairing COULD be arbitrary
@@ -4479,7 +4479,8 @@ proc editLstPref {key args} {
 proc editLstFeedback {wdg msg} {
     # Pretend to enter a new value (but dont let the command fire) ... then
     # 1250ms later, clear with an EMPTY value (and LET it fire w/no effect)
-    $wdg configure -commandstate disabled -value "$msg"
+    $wdg configure -commandstate disabled
+    $wdg configure -value "$msg"
     after 1250 "$wdg configure -commandstate normal -value {}"
 }
 
@@ -5661,6 +5662,17 @@ proc set-tag {hID newtag {oldtag ""} {setpos 0}} {
 
     # Figure out which lines we need to address...
     if {![info exists g(scrInf,$hID)]} {
+        # This may seem an ODD place for this to be but it IS correct
+        #   If the REASON we can't find the designated hID is because there is
+        # NONE TO BE FOUND (zero diffs) its POSSIBLE we just did a newDiff,
+        # reloading all of the Text widgets and their CONTENTS.
+        #   We needed to DELAY till here so g(startPhase) could be reset to
+        # allow plot actions to occur. This just fires the trace to "re-plot"
+        if {!$g(count)} {
+            $w(LeftText)  see 1.0
+            $w(RightText) see 1.0
+            if {$g(showmerge)} {$w(mergeText) see 1.0}
+        }
         return ""
     }
     lassign $g(scrInf,$hID) S E na na cL na na cR
@@ -6921,6 +6933,7 @@ proc rediff {} {
     }
 
     # Mark up the two text widgets and go to the first diff (if there is one).
+    # Otherwise BLANK the combobox (in case it has old data from a PRIOR diff)
     show-status "Marking differences..."
 
     if {[mark-diffs]} {
@@ -6928,6 +6941,9 @@ proc rediff {} {
         move 1 0 1
         buttons normal
     } else {
+        $w(combo) configure -commandstate disabled
+        $w(combo) configure -value {}
+        $w(combo) configure -commandstate normal
         after idle {show-status "Files are identical"}
         buttons disabled
     }
