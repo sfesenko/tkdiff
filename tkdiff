@@ -1964,6 +1964,19 @@ proc alignDecor {pairnum} {
         set_tooltips $w(${LR}Label) "$tipdata"
     }
 
+    # Add/Remove the Ancestor indicator (and its tooltip) as needed
+    if {$g(is3way)} {
+        grid $w(AncfLabel) -row 0 -column 1
+        if {![info exists finfo(tmp,0)]} {
+            set    tipdata "{$finfo(pth,0)\n"
+            append tipdata "[clock format [file mtime $finfo(pth,0)]]}"
+        } { set    tipdata "{$finfo(lbl,0)}"}
+        set_tooltips $w(AncfLabel) "$tipdata"
+    } else {
+        set_tooltips $w(AncfLabel) {}
+        grid forget $w(AncfLabel)
+    }
+
     # Unlock a preset mergefile name if the CURRENT pairing COULD be arbitrary
     if {$finfo(fPairs) > 1} {set g(mergefileset) 0}
 
@@ -2492,7 +2505,7 @@ proc build-client {} {
     # in the code
     #
     # Text  - holds the text of the file
-    # Info  - holds meta-data ABOUT 'Text': line numbers & Changebars
+    # Info  - holds meta-data ABOUT 'Text': LineNums, Changebars, etc
     # VSB   - vertical scrollbar
     # HSB   - horizontal scrollbar
     # Label - label to hold the name of the file
@@ -2501,6 +2514,8 @@ proc build-client {} {
     set w(LeftVSB) $w(client).left.vsb
     set w(LeftHSB) $w(client).left.hsb
     set w(LeftLabel) $w(client).leftlabel
+
+    set w(AncfLabel) $w(client).ancFile
 
     set w(RightText) $w(client).right.text
     set w(RightInfo) $w(client).right.info
@@ -2525,6 +2540,8 @@ proc build-client {} {
                                -textvariable finfo(lbl,Left)
     label $w(RightLabel) -bd 1 -relief flat -width $width \
                                -textvariable finfo(lbl,Right)
+    # Might need this for a 3way diff (see 'alignDecor' for details)
+    button $w(AncfLabel) -bd 0 -image ancfImg
 
     # this holds the text widgets and the scrollbars. The reason
     # for the frame is purely for aesthetics. It just looks
@@ -8324,7 +8341,7 @@ proc write-report {command args} {
             puts $handle [format "    $msg" $aCnt " added " $aTot]
             puts $handle [format "    $msg" $cCnt "changed" $cTot]
             puts -nonewline $handle "\n"
-            set msg "%6d %s lines were affected: %4.2g %% of %6d"
+            set msg "%6d %s lines were affected: %4.4g %% of %6d"
             puts $handle [format "    $msg" $modLft "Left " $pctLft $sz(Left) ]
             puts $handle [format "    $msg" $modRgt "Right" $pctRgt $sz(Right)]
             puts $handle "\n"
@@ -8963,6 +8980,11 @@ The top row contains the <btn>File</btn>, <btn>Edit</btn>, <btn>View</btn>,\
       will <itl>also</itl> produce a tooltip popup showing the ACTUAL filename\
       and its modification time when hoverring over it with the mouse,\
       <itl>provided</itl> it is not a tempfile (such as extracted from an SCM).
+      In addition, if an ANCESTORFILE was specified at startup, a third label\
+      (a graphic denoting a text file labelled  "A") will appear between the\
+      other two labels. It also will display a tooltip indicating its name,\
+      and <itl>possibly</itl> its modification time, the latter based on the\
+      file <itl>not</itl> having been extracted from an SCM.
 
 The left-most text widget displays the contents of <cmp>FILE1</cmp>, the most\
       recently checked-in revision, <cmp>REV</cmp> or <cmp>REV1</cmp>,\
@@ -9324,8 +9346,10 @@ Oftentimes, you may find that the "Diff" program has packed several lines\
 
 A 3way merge, as the name suggests, involves a third file that is expected\
       to have been an earlier <itl>common</itl> version to <itl>both</itl>\
-      files presently being compared. This <bld>ancestor</bld> file allows\
-      $g(name) to look backward in time, to address the unique issue of\
+      files presently being compared. Providing this <bld>ancestor</bld> file\
+      will cause an icon to appear <itl>between</itl> the normal Left/Right\
+      file labels on the display (indicating the mode is in force) and thus\
+      allow $g(name) to look backward in time, to address the unique issue of\
       intentionally diverged <itl>independent</itl> modifications (the Left\
       and Right files) being merged back together into a single output file. 
       Specifically, $g(name) wants to identify the modifications that\
@@ -12593,6 +12617,12 @@ image create photo txtfImg -format gif -data {
 R0lGODlhFAAWAKIAANnZ2TMzM////wAAAJmZmf///////////yH5BAEAAAAALAAAAAAUABYA
 AANYGLq88BAEQaudIb5pO88R11UiuI3XBXFD61JDEM8nCrtujbcW4RODmq3yC0puuxcFKBwS
 jaykUsA8OntQpPTZvFZF2un3iu1ul1kyuuv8Bn7wuE8WkdqNCQA7
+}
+
+image create photo ancfImg -format gif -data {
+R0lGODlhFAAUAJEAANnZ2QAAAPDw8P///yH5BAEAAAAALAAAAAAUABQAAAJKRI6ZwB0N4Xsy
+WkpZttp57igdaCgYiVQGuAiAcEaHtsUNjNUjXfYMPFqUZp8MMaTaXDLAFUcYRB2dyovrZSMl
+r9yX1yVoDk3kRwEAOw==
 }
 
 image create photo nullImg
