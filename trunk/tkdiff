@@ -2533,22 +2533,24 @@ proc build-client {} {
     set rightFrame $w(client).right
 
     # we'll create each widget twice; once for the left side
-    # and once for the right.
+    # and once for the right, but first the Labels.
     debug-info " Assigning labels to headers"
     scan $opts(geometry) "%dx%d" width height
     label $w(LeftLabel)  -bd 1 -relief flat -width $width \
                                -textvariable finfo(lbl,Left)
     label $w(RightLabel) -bd 1 -relief flat -width $width \
                                -textvariable finfo(lbl,Right)
+
     # Might need this for a 3way diff (see 'alignDecor' for details)
-    button $w(AncfLabel) -bd 0 -image ancfImg
+    button $w(AncfLabel) -bd 0 -image ancfImg -command {
+      simpleEd open $finfo(pth,0) title "$finfo(lbl,0) - Ancestor" \
+        ro fg [$w(mergeText) cget -fg] bg [$w(mergeText) cget -bg] }
 
-    # this holds the text widgets and the scrollbars. The reason
+    # These hold the text widgets and the scrollbars. The reason
     # for the frame is purely for aesthetics. It just looks
-    # nicer, IMHO, to "embed" the scrollbars within the text
-    # widget
-    frame $leftFrame -bd 1 -relief sunken
+    # nicer, IMHO, to "embed" the scrollbars within the text widget
 
+    frame $leftFrame  -bd 1 -relief sunken
     frame $rightFrame -bd 1 -relief sunken
 
     scrollbar $w(LeftHSB) -borderwidth 1 -orient horizontal -command \
@@ -8984,7 +8986,10 @@ The top row contains the <btn>File</btn>, <btn>Edit</btn>, <btn>View</btn>,\
       (a graphic denoting a text file labelled  "A") will appear between the\
       other two labels. It also will display a tooltip indicating its name,\
       and <itl>possibly</itl> its modification time, the latter based on the\
-      file <itl>not</itl> having been extracted from an SCM.
+      file <itl>not</itl> having been extracted from an SCM. But in reality\
+      it is actually a <bld>button</bld> that when pressed, will popup a\
+      <itl>display only</itl> presentation of that Ancestor file, for those\
+      who simply <itl>have</itl> to see it.
 
 The left-most text widget displays the contents of <cmp>FILE1</cmp>, the most\
       recently checked-in revision, <cmp>REV</cmp> or <cmp>REV1</cmp>,\
@@ -9348,7 +9353,8 @@ A 3way merge, as the name suggests, involves a third file that is expected\
       to have been an earlier <itl>common</itl> version to <itl>both</itl>\
       files presently being compared. Providing this <bld>ancestor</bld> file\
       will cause an icon to appear <itl>between</itl> the normal Left/Right\
-      file labels on the display (indicating the mode is in force) and thus\
+      file labels on the display (indicating the mode is in force and\
+      permitting viewing access if absolutely necessary) and thereby\
       allow $g(name) to look backward in time, to address the unique issue of\
       intentionally diverged <itl>independent</itl> modifications (the Left\
       and Right files) being merged back together into a single output file. 
@@ -9983,6 +9989,8 @@ proc setAquaDialogStyle {toplevel} {
 ##########################################################################
 # A simple editor, from Bryan Oakley.
 # 22Jun2018  mpm: now accepts (opt.) line number to display (dflt = 1)
+# 04Aug2018  mpm: additional keywords/parsing added for open subcmd
+#            mpm: now provides line numbering (in seperate subwindow)
 ##########################################################################
 proc simpleEd {command args} {
     global textfont
@@ -9990,8 +9998,27 @@ proc simpleEd {command args} {
 
     switch -- $command {
     open {
-            set filename [lindex $args 0]
-            set line [expr {([llength $args] > 1) ? [lindex $args 1] : 1}]
+            # Ingest required args (and establish default options):
+            #   filename
+            if {[set argn [llength $args]]} {
+                set filename [lindex $args [set count 0]]
+                set line 1
+                set title  "$filename - Simple Editor"
+                set FG {}
+                set BG {}
+            } {error "simpleEd open ?filename?: reqd arg missing"}
+
+            # ... then see if others were provided (in any order)
+            #   [Lnum] ['fg' color] ['bg' color] ['title' xxxx] ['ro']
+            while {[incr count] < $argn} {
+                switch -glob [set arg [lindex $args $count]] {
+                "\[0-9]" { set line $arg }
+                "f*"     { lappend FG -fg [lindex $args [incr count]] }
+                "b*"     { lappend BG -bg [lindex $args [incr count]] }
+                "t*"     { set title      [lindex $args [incr count]] }
+                "ro"     { set RO    [list configure -state disabled] }
+                }
+            }
 
             set w .editor
             set count 0
@@ -10001,50 +10028,85 @@ proc simpleEd {command args} {
             set w ${w}$count
 
             toplevel $w -borderwidth 2 -relief sunken
-            wm title $w "$filename - Simple Editor"
+            wm title $w $title
             wm group $w .
 
             menu $w.menubar
             $w configure -menu $w.menubar
             $w.menubar add cascade -label "File" -menu $w.menubar.fileMenu
-            $w.menubar add cascade -label "Edit" -menu $w.menubar.editMenu
 
             menu $w.menubar.fileMenu
-            menu $w.menubar.editMenu
 
-            $w.menubar.fileMenu add command -label "Save" -underline 1 \
-              -command [list simpleEd save $filename $w]
-            $w.menubar.fileMenu add command -label "Save As..." -underline 1 \
-              -command [list simpleEd saveAs $filename $w]
+            if {![info exists RO]} {
+                $w.menubar.fileMenu add command -label "Save" \
+                  -underline 1 -command [list simpleEd save $filename $w]
+                $w.menubar.fileMenu add command -label "Save As..." \
+                  -underline 1 -command [list simpleEd saveAs $filename $w]
             $w.menubar.fileMenu add separator
+            }
             $w.menubar.fileMenu add command -label "Exit" -underline 1 \
               -command [list simpleEd exit $w]
 
-            $w.menubar.editMenu add command -label "Cut" -command [list event \
-              generate $w.text <<Cut>>]
+            if {![info exists RO]} {
+                $w.menubar add cascade -label "Edit" -menu $w.menubar.editMenu
+
+                menu $w.menubar.editMenu
+
+                $w.menubar.editMenu add command -label "Cut" -command \
+                  [list event  generate $w.text <<Cut>>]
             $w.menubar.editMenu add command -label "Copy" -command \
               [list event generate $w.text <<Copy>>]
             $w.menubar.editMenu add command -label "Paste" -command \
               [list event generate $w.text <<Paste>>]
+            }
 
             text $w.text -wrap none -xscrollcommand [list $w.hsb set] \
-              -yscrollcommand [list $w.vsb set] -borderwidth 0 -font $textfont
+              -yscrollcommand [list $w.vsb set] -borderwidth 0 \
+              -font $textfont {*}$FG {*}$BG
             scrollbar $w.vsb -orient vertical -command [list $w.text yview]
             scrollbar $w.hsb -orient horizontal -command [list $w.text xview]
 
-            grid $w.text -row 0 -column 0 -sticky nsew
-            grid $w.vsb -row 0 -column 1 -sticky ns
-            grid $w.hsb -row 1 -column 0 -sticky ew
+            # Derive needed info to fabricate/utilize a line numbering canvas
+            set Aft [font metrics $textfont -ascent]   ;# Ascent of font
+            set Dw  [font measure $textfont "8"]       ;# Digit width
+            set Fg  [$w.text cget -fg]        ;# Same foreground & background
+            canvas $w.cnvs -highlightthickness 0 -bg [$w.text cget -bg]
 
-            grid columnconfigure $w 0 -weight 1
-            grid columnconfigure $w 1 -weight 0
+            grid $w.cnvs -row 0 -column 0 -sticky nsew
+            grid $w.text -row 0 -column 1 -sticky nsew
+            grid $w.vsb -row 0 -column 2 -sticky ns
+            grid $w.hsb -row 1 -column 1 -sticky ew
+
+            grid columnconfigure $w 0 -weight 0
+            grid columnconfigure $w 1 -weight 1
+            grid columnconfigure $w 2 -weight 0
             grid rowconfigure $w 0 -weight 1
             grid rowconfigure $w 1 -weight 0
 
             set fd [open $filename]
             $w.text insert 1.0 [read $fd]
             close $fd
-            $w.text see $line.0
+
+            set lenDigits [string length [$w.text index end]]
+            $w.cnvs configure -width [set X [expr {int($lenDigits-2)*$Dw+3}]]
+            # N.B> tracing on the Vert-Scrlbar trips on window resizes too
+            trace add execution $w.vsb leave [list apply "{Fg Asc X args} {
+                $w.cnvs delete all
+                set Lnum \[expr {int(\[$w.text index @0,0])}]
+                set LastLnum \[expr {int(\[$w.text index end-1lines])}]
+                while {\[llength \[set dl \[$w.text dlineinfo \$Lnum.0]]]>0} {
+                    if {\$Lnum == \$LastLnum} {break} ;# ignore extra last line
+                    lassign \$dl na y na na bl
+                    incr y \$bl
+                    incr y -\$Asc
+                    $w.cnvs create text \$X \$y -anchor ne -font \"$textfont\" \
+                              -fill \$Fg -text \$Lnum
+                    incr Lnum
+                }
+                update idletasks
+            }" $Fg $Aft [incr X -2]]
+            $w.text see $line.0 ;# N.B> done AFTER the trace setup to tickle it
+            if {[info exists RO]} {$w.text {*}$RO }
         }
     save {
             set filename [lindex $args 0]
@@ -12620,7 +12682,7 @@ jaykUsA8OntQpPTZvFZF2un3iu1ul1kyuuv8Bn7wuE8WkdqNCQA7
 }
 
 image create photo ancfImg -format gif -data {
-R0lGODlhFAAUAJEAANnZ2QAAAPDw8P///yH5BAEAAAAALAAAAAAUABQAAAJKRI6ZwB0N4Xsy
+R0lGODlhFAAUAJEAANnZ2QAAAD8/P////yH5BAEAAAAALAAAAAAUABQAAAJKRI6ZwB0N4Xsy
 WkpZttp57igdaCgYiVQGuAiAcEaHtsUNjNUjXfYMPFqUZp8MMaTaXDLAFUcYRB2dyovrZSMl
 r9yX1yVoDk3kRwEAOw==
 }
