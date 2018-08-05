@@ -1,10 +1,12 @@
 4.3.5           (08/08/2018):
-     * New Diff Dialog now allows browsing for files OR directories
+     * NewDiff Dialog now allows browsing for files OR directories
+     - with the Ancestor file also permitted to extract from an SCM
      - additionally it and browsers now stack above each other properly
-     - and the ancestor file is permitted to extract from an SCM source
      * Tool arguments now permit cross-branch SCM comparison specification
+     * Ability to view Ancestorfile also denotes 3way mode is active
      * 3way collisions now findable via toolbar dropdown list highlights
      * Textwin labels now tooltip the name+modtime of any NON-temp file
+     * Builtin editor now provides Line numbers
      * Fixed recent new color preference settings to "apply" correctly
      * Crash fixed when 3way diff was active and Lnum+Chgbars are OFF
      * Pre-startup latency msg feature now OFF (MacOS X only) fixes Crash
