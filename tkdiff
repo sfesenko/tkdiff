@@ -591,7 +591,7 @@ proc run-command {cmd {out {}}} {
         }
     }
 
-   #debug-info "runcmd RESULTS($exitcode): out([string length $STDout])\
+    #debug-info "runcmd RESULTS($exitcode): out([string length $STDout])\
                                 err([string length $STDerr]) appropriate ?"
     return [list "$STDout" "$STDerr" "$exitcode"]
 }
@@ -1635,6 +1635,7 @@ proc commandline {} {
         # own list of difference candidates when NO ARGS have been provided
         # Generally this results in HEAD .vs. 'sandbox' (aka 'working copy')
         switch -- [scm-detect "."] {
+            CVS -
             SVN -
             GIT { incr revs }
         }
@@ -1745,6 +1746,10 @@ proc assemble-args {} {
 
             SVN {
                 set cnt [inquire-svn $revs msg]
+            }
+
+            CVS {
+                set cnt [inquire-cvs $revs msg]
             }
 
             default {
@@ -2162,19 +2167,118 @@ proc inquire-svn {revs msgRet} {
     #      M    -modified
     #      xM   -(2nd M) properties modified
     # Do we need to pass an EMPTY file if the flag shows up as 'D' or 'A' ??
+    #   - I think we should ignore them, just as git diff does. They'll cause an
+    #     error otherwise  - dr
+    # Note, svn diff --summarize doesn't report a conflicted file differently, so
+    # we may end up doing a plain diff when we should do a conflict diff
+
     set ndx 0
     foreach ln [split $svnOUT "\n"] {
-        if {"" == [string trim [set file [string range $ln 8 end]]]} {continue}
-        foreach i {1 2} {
-            incr ndx
-            if {"" != $rev($i)} {
-                if {[get-file-rev $file $ndx $rev($i) SVN]} {
-                    if {$i == 1} {incr ndx -1; break} {incr ndx -2}
+        if {[lindex $ln 0] eq "M"} {
+            string trim [set file [string range $ln 8 end]]
+            foreach i {1 2} {
+                incr ndx
+                if {"" != $rev($i)} {
+                    if {[get-file-rev $file $ndx $rev($i) SVN]} {
+                        if {$i == 1} {incr ndx -1; break} {incr ndx -2}
+                    }
+                } else {
+                    # Just point at the REAL 'working copy' file (allows editting)
+                    set finfo(lbl,$ndx) "$file (SVN--WC)"
+                    set finfo(pth,$ndx) $file
                 }
-            } else {
-                # Just point at the REAL 'working copy' file (allows editting)
-                set finfo(lbl,$ndx) "$file (SVN--WC)"
-                set finfo(pth,$ndx) $file
+            }
+        }
+    }
+    restore-cursor
+    return $ndx
+}
+
+###############################################################################
+# Request cvs to supply relevant target argument(s)
+###############################################################################
+proc inquire-cvs {revs msgRet} {
+    global finfo
+    upvar $msgRet MSG
+    debug-info "inquire-cvs ($revs)"
+
+    # 'cvs diff --brief' tells us what changed
+    #
+    # rev is what we will tell cvs update -p to access
+    # cmit is how we express the range to 'cvs diff'
+    set cmit(2) [set rev(2) ""]
+
+    # This could take some time, so let user know we are busy
+    watch-cursor "Inquiring of CVS for files..."
+
+    if {$revs == 0} {
+        # Sets up       BASE     ->   WC
+        set cmit(1) [set rev(1) "BASE"]
+    } elseif {$revs <= 2} {
+        # Sets up    R1   ->   (WC or R2)
+        set cmit(1) [set rev(1) $finfo(rev,1)]
+        if {$revs == 2} {
+            # Finish seting up    R1   ->   R2
+            set cmit(2) " -r [set rev(2) $finfo(rev,2)]"
+        }
+    }
+
+    # Ask CVS what changed between the given endpoint(s)
+    set outfile [tmpfile "cvsout" 0]
+    set result [run-command "cvs diff -l --brief -r $cmit(1)$cmit(2)" $outfile]
+    set cvsOUT [lindex $result 0]
+    set cvsERR [lindex $result 1]
+    set cvsRC [lindex $result 2]
+    # Slurp up the output file. We need to catch it in case it's empty to undo
+    # run-command writing an error message over it.
+    set fp [open $outfile r]
+    set cvsOUT [read $fp]
+    close $fp
+    # cvsRC can be non-zero in many cases, for example if a file doesn't have
+    # one of the revs, so it isn't very meaningful here
+    # cvsERR will at least contain "cvs diff: Diffing ." but in the empty case,
+    # cvsRC is zero
+    if {[string match {*Diffing*} $cvsERR] } {
+        if {$cvsOUT == ""} {
+            set MSG "CVS diff shows NO output using -r $cmit(1)$cmit(2)"
+            return 0
+        }
+    }
+
+    # Expected output form will look like:
+    # Index: File2.txt
+    # ===================================================================
+    # RCS file: /home/dorothyr/testdir/CVS_REPOSITORY/cvs_test/File2.txt,v
+    # retrieving revision 1.5
+    # diff --brief -r1.5 File2.txt
+    # Files /var/tmp/cvsdBUe0v and File2.txt differ
+    # cvs diff: File3.txt was removed, no comparison available
+    # cvs diff: FileAdd.txt is a new entry, no comparison available
+    # Index: Ftrunk.txt
+    # ===================================================================
+    # RCS file: /home/dorothyr/testdir/CVS_REPOSITORY/cvs_test/Ftrunk.txt,v
+    # retrieving revision 1.5
+    # diff --brief -r1.5 Ftrunk.txt
+    # Files /var/tmp/cvs3Wrp6F and Ftrunk.txt differ
+    #
+    # Note, cvs diff --brief doesn't report a conflicted file differently, and
+    # cvs update -p will throw an error, unlike svn cat -p
+
+    set ndx 0
+    foreach ln [split $cvsOUT "\n"] {
+        if {[string match "Index:*" $ln]} {
+            set file [string trim [lindex $ln 1]]
+            foreach i {1 2} {
+                incr ndx
+                if {"" != $rev($i)} {
+                    if {[get-file-rev $file $ndx $rev($i) CVS]} {
+                        if {$i == 1} {incr ndx -1; break} {incr ndx -2}
+                    }
+                } else {
+                    # Just point at the REAL 'working copy' file (allows editing)
+                    set finfo(lbl,$ndx) "$file (CVS--WC)"
+                    set finfo(pth,$ndx) $file
+                }
             }
         }
     }
