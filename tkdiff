@@ -280,8 +280,8 @@ array set g {
 #   comparison but NOT yet fully extracted from a necessary SCM repository;
 #   or files NOT editable because they were extracted by an SCM).
 #     EXERCISE CARE Re: ADDING/RENAMING of NEW elements...
-#         Category 2 values are essentially considered TRANSIENT and MAY BE
-#         DELETED or reset at times using patterns such as '[ptl]*[0-9]'.
+#         Category 2/3 values are essentially considered TRANSIENT and MAY BE
+#         DELETED or reset at times using patterns such as '[aptl]*[0-9]'.
 #
 #   Be VERY CAUTIOUS when considering CHANGING ANY of these manipulations!
 array set finfo {
@@ -327,15 +327,15 @@ array set opts {
     showcbs           1
     showln            1
     showmap           1
-    showlineview      0
     showinline1       0
     showinline2       1
+    showlineview      0
     syncscroll        1
-    toolbarIcons      1
+    tabstops          8
     tagcbs            0
     tagln             0
     tagtext           1
-    tabstops          8
+    toolbarIcons      1
 }
 
 # reporting options
@@ -369,7 +369,7 @@ if {[string first "color" [winfo visual .]] >= 0} {
         instag     "-background $colorins -font $bold"
         chgtag     "-background LightSteelBlue"
         overlaptag "-background $colorolp"
-        bytetag    "-background blue -foreground white"
+        bytetag    "-background blue -foreground white -underline 1"
         inlinetag  "-background $colorchg -font $bold"
         mapins     "$colorins"
         mapdel     "$colordel"
@@ -633,12 +633,11 @@ proc scm-chkget {ndx} {
     }
     debug-info "scm-chkget ($ndx) -> '$finfo(${A}tmp,$ndx)': $finfo(${A}pth,$ndx)"
 
-    set result [run-command "$finfo(${A}tmp,$ndx)" "$finfo(${A}pth,$ndx)"]
-    set stdout [lindex $result 0]
-    set stderr [lindex $result 1]
+    lassign [run-command "$finfo(${A}tmp,$ndx)" "$finfo(${A}pth,$ndx)"] \
+                            scmOUT scmERR scmRC
 
     # Remember to postproccess (if needed) and ...
-    if {![lindex $result 2]} {
+    if {!$scmRC} {
         if {[info exists finfo(${A}pproc,$ndx)]} {
             $finfo(${A}pproc,$ndx) "$finfo(${A}pth,$ndx)"
         }
@@ -646,8 +645,16 @@ proc scm-chkget {ndx} {
         return [set finfo(${A}tmp,$ndx) ""]
     }
 
+    # This atrocity originated because CVS refuses to extract the Repo version
+    # of a CONFLICTED file - but WITHOUT posting any visible REASON ... WTF? !
+    #   So look for this and inject our OWN error msg
+    if {[set msg "$scmERR\n$scmOUT"] == "\n" \
+    &&  [string match {cvs[ .]*} $finfo(${A}tmp,$ndx)]} {
+      set msg "Is this a CONFLICTed file(?): [lindex $finfo(${A}tmp,$ndx) end]"
+    }
+
     # Send messages back to caller only on failure
-    return "$stderr\n$stdout" ;# Failed!
+    return "$msg" ;# Failed!
 }
 
 ###############################################################################
@@ -1151,7 +1158,8 @@ proc plot-line-info {side args} {
 # Returns the names of the two tempfiles and the original names they represent
 # N.B> its POSSIBLE a third file (an ancestor) may be seen in the input format
 #      Although key pieces of code to implement have been provided, the SUPPORT
-#      at this time is to silently IGNORE any such data pending other changes
+#      at this time is to parse but silently IGNORE any such data pending a
+#      decision on how such data would thus be USED by the caller
 ###############################################################################
 proc split-conflictfile {name} {
     global g opts
@@ -1170,21 +1178,22 @@ proc split-conflictfile {name} {
 
     set output 7
     while {[gets $input line] >= 0} {
-        # First marker tells us whose marking FORMAT to follow
+        # The FIRST marker tells us whose marking FORMAT to follow
         if {$firstMatch == ""} {
             if {[regexp {^<<<<<<<* +(.*)} $line]} {
                 # This maps 'diff3-like' markers
                 set firstMatch  {^<<<<<<<* +(.*)}
                 set secondMatch {^=======*}
                 set thirdMatch  {^>>>>>>>* +(.*)}
-                set fourthMatch {^|||||||* +(.*)}
+                set fourthMatch {^\|\|\|\|\|\|\|* +(.*)}
 
             } elseif {[regexp {^>>>>>>>* +(.*)} $line]} {
                 # This maps '??whose??' markers (why do they have their OWN?)
+                #  (Pls add identifying comment!!)
                 set firstMatch  {^>>>>>>>* +(.*)}
                 set secondMatch {^<<<<<<<* +(.*)}
                 set thirdMatch  {^=======*}
-                set fourthMatch {^|||||||* +(.*)} ;# is this even possible?
+                set fourthMatch {^\|\|\|\|\|\|\|* +(.*)} ;# is this possible?
             }
         }
         # Dont bother with matching until we find the first marker
@@ -1229,12 +1238,12 @@ proc split-conflictfile {name} {
     if {$secondname == ""} { set secondname "new" }
 #   if {$thirdname == ""}  { set thirdname  "anc" }
 
-    # Cant return a 'third' file until caller knows how to HANDLE it
+    # Shouldn't return a 'third' file until caller knows how to HANDLE it
     return "{$temp1} {$temp2} {$firstname} {$secondname}"
 }
 
 ###############################################################################
-# Derive the Src Code Managment systems that appear VALID for given dir or file
+# Derive the Src Code Management systems that seem VALID for given dir or file
 ###############################################################################
 proc scm-detect {fn {extra {}}} {
 
@@ -1708,7 +1717,7 @@ proc commandline {} {
     if {!$pths} {
         # The automatic way out is a SINGLE, preferred, searchable SCM, with
         # either given Revs, -OR- the users REQUEST that searching is desired.
-        # Otherwise it all gets load into the Dialog and the user can handle it
+        # Otherwise it all loads into the Dialog and the user can handle it
         # N.B> do not simplify logic: 'scmDOsrch' is NEEDED by 'assemble-args'
 
         # First, resolve which SIDE may have a viable SCM (if any)
@@ -1790,23 +1799,27 @@ proc assemble-args {} {
 #       the SCM, even if either revision were to MATCH that of the sandbox.
 #       - finally, if NO ARGS are provided, CERTAIN SCM systems may generate
 #       their OWN list of files AND the revision pockets each should come from
+#       PROVIDED the user agrees such action should occur.
 
     set cnt 0 ;# Track how many IMPLIED files ultimately are derived
 
     if {$g(conflictset)} {
         if {$revs == 0 && $pths == 1} {
             #################################################################
-            # tkdiff -conflict FILE
+            # tkdiff -conflict FILE           (N.B> does NOT preclude a 3way)
             #################################################################
             set files [split-conflictfile "$finfo(f,1)"]
-            if {![get-file [lindex "$files" 0] 1]} {incr ndx}
-            if {![get-file [lindex "$files" 1] 2]} {incr ndx}
-            # A conflict file may come from merge, cvs, or vmrg.  The
-            # names of the files/revisions depend on how it was made and
-            # are taken from the <<<<<<< and >>>>>>> lines inside it.
-            set finfo(lbl,1) [lindex "$files" 2]
-            set finfo(lbl,2) [lindex "$files" 3]
-            set cnt 2
+            if {[get-file [lindex "$files" 0] [incr cnt]]} {incr cnt -1} {
+                if {![get-file [lindex "$files" 1] [expr {1+$cnt}]]} {
+                    # A conflict file may come from multiple SCM tools.
+                    # The names of the files/revisions depend on how it
+                    # was made and derive from the MARKER lines inside it.
+                    set finfo(lbl,$cnt) "[lindex "$files" 2] (Cflct)"
+                    set finfo(tmp,$cnt) ""
+                    set finfo(lbl,[incr cnt]) "[lindex "$files" 3] (CFlct)"
+                    set finfo(tmp,$cnt) ""
+                } {array unset finfo "\[pl]*,$cnt" ; incr cnt -1}
+            }
         } else {
             set msg "a -conflict run should have ONLY 1 filespec (we saw $pths)"
         }
@@ -2055,7 +2068,7 @@ proc assemble-args {} {
 proc alignDecor {pairnum} {
     global g w finfo
 
-    # Establish if 3way mode is NOW active and what file ndxs will be used
+    # Establish if 3way mode is NOW active and what file ndxs are in use
     set g(is3way) [info exists finfo(albl,$pairnum)]
     debug-info "is3way($g(is3way))"
     set  ndx(1) [set ndx(2) [expr {$pairnum * 2}]]
@@ -2124,8 +2137,8 @@ proc inquire-git {revs msgRet} {
 
     # Git diff requires 0-2 commit-ish "somethings" (hash, HEAD, etc...)
     #
-    # As such, we expect those args to come thru as 'revs'; 'pths' would
-    # only be useful to LIMIT the list being constructed.
+    # As such, we expect those args to come thru as 'revs'; 'pths' could
+    # only be useful to LIMIT the list being constructed (if we allowed them).
     #   Git differs from most SCMs in that it has an intermediate "pocket"
     # (called the 'index', or 'stage') BETWEEN the working copy (WC) and a
     # bona-fide "commit" (aka revision). Therefore while the nominal mapping
@@ -2134,11 +2147,11 @@ proc inquire-git {revs msgRet} {
     #       0   = HEAD -> WC
     #       1   = rev -> WC
     #       2   = revA -> revB
-    # use of a BLANK rev ("  ") denotes the Index. Everything else should be
+    # use of a BLANK rev ("  ") denotes the Index. Everything else SHOULD be
     # handled by "git rev-parse" (tags/hashes/branches/expressions/etc.)
-    # Actual filesys entities are handled via "get-file-rev" (NOT in this proc)
+    # Actual filesys entities are handled via "get-file-rev" (NOT by this proc)
     #
-    #   HOWEVER, we are responsible for mapping the BLANK rev to the --staged
+    #   However, WE are responsible for mapping the BLANK rev to the --staged
     # keyword required to make "git diff" actually access the Index.
     set cmit(2) [set rev(2) ""]
     if {$revs == 0} {
@@ -2160,11 +2173,14 @@ proc inquire-git {revs msgRet} {
         }
     }
 
+    # NORMALLY we would only extract the first pairing and simply RECORD
+    # the others for later processing...but Git is a local-access SCM,
+    # thus NO 'watch-cursor' call for latency - just go DO IT right now...
+    #
     # Ask Git which files ACTUALLY differ between the given endpoint(s)
-    set result [run-command "git diff --name-only $cmit(1) $cmit(2)"]
-    set gitOUT [lindex $result 0]
-    set gitERR [lindex $result 1]
-    set gitRC [lindex $result 2]
+    #   (but limit it to those files seemingly modified - NO add/del)
+    set cmd "git diff --diff-filter=M --name-only $cmit(1) $cmit(2)"
+    lassign [run-command $cmd] gitOUT gitERR gitRC
     if {$gitRC != 0 || $gitOUT == ""} {
         if {$gitRC == 0} {
             set MSG "Git Diff shows NO output using args: $cmit(1) $cmit(2)"
@@ -2175,6 +2191,50 @@ proc inquire-git {revs msgRet} {
     set git_root [exec git rev-parse --show-toplevel]
     set ndx 0
     foreach file [split $gitOUT "\n"] {
+        # Ordinarily, 2-Revs would mean no possible WC interaction ...
+        #   But if either referred to the Index, then we need to check it
+        #
+        # Look for an "unmerged" situation (only shows up in the Index)
+        # Stage #s are:  1:ancestor  2:ours  3:theirs
+        #   (N.B> but unknown if they will extract here in that order)
+        if {($revs < 2 || $cmit(2) == "-staged" || $cmit(2) == "-staged")  \
+        && (1< [llength [set xx [split [exec git ls-files -s $file] "\n"]]])} {
+
+            foreach i {3 2 1} {
+                # Find each given stage (in theirs/ours/ancestor order)
+                foreach stage $xx { if {$i == [lindex $stage end-1]} {break} }
+
+                # Label the pieces and ...
+                if {$i == 1} {
+                    set finfo(apth,[expr {$ndx/2}]) [set f [tmpfile "tg_$i"]]
+                    set finfo(albl,[expr {$ndx/2}]) "Ancestor (Git Cflct)"
+                    set finfo(atmp,[expr {$ndx/2}]) ""
+                } else {
+                    set finfo(pth,[incr ndx]) [set f [tmpfile "git_$i"]]
+                    set finfo(tmp,$ndx) "" 
+                    set finfo(lbl,$ndx) "$file (GIT Cflct-"
+                    if {$i == 2} { append finfo(lbl,$ndx) "ours)" } \
+                    else         { append finfo(lbl,$ndx) "theirs)" }
+                }
+                # ... grab the file content using its SHA1 id
+                set cmd "git cat-file blob [lindex $stage end-2]"
+                lassign [run-command $cmd $f] na gitERR gitRC
+
+                # BUT - erase it ALL if ANY of it fails
+                if {$gitRC} {
+                    set MSG "Git couldn't extract Conflict stage($i): $file\n"
+                    append MSG $gitERR
+                    if {$i == 1} {array unset finfo "a*,[expr {$ndx/2}]"}
+                    if {$i <= 2} {array unset finfo "\[ptl]*,$ndx"}
+                    if {$i <  3} {incr ndx -1}
+                    if {$i <= 3} {array unset finfo "\[ptl]*,$ndx"; incr ndx -1}
+                    debug-info "$MSG"
+                }
+            }
+            continue
+        }
+
+        # Otherwise its (supposedly) a plain old difference
         foreach i {1 2} {
             incr ndx
             if {$rev($i) != ""} {
@@ -2182,18 +2242,15 @@ proc inquire-git {revs msgRet} {
                     set finfo(lbl,$ndx) "$file (Git$cmit($i))"
                 } { set finfo(lbl,$ndx) "$file (Git $rev($i))"}
 
-                # NORMALLY we would only extract the first pairing and
-                # simply RECORD the others for later processing...BUT - Git
-                # is a "local-machine" access method (no latency) so doing
+                # Git is a "local-machine" access method (no latency) so doing
                 # them ALL right now should not be a burden.
                 #   If that proves wrong, THIS is where to fix it.
                 set finfo(pth,$ndx) [tmpfile "tkd__[file tail $file]"]
                 set finfo(tmp,$ndx) ""
                 set cmd "git show $rev($i):$file"
 
-                set result [run-command $cmd $finfo(pth,$ndx)]
-                if {[lindex $result 2]} {
-                    set gitERR [lindex $result 1]
+                lassign [run-command $cmd $finfo(pth,$ndx)] na gitERR gitRC
+                if {$gitRC} {
                     if [string match "*exists on disk*" $gitERR] {
                         #   (the file simply is not *from* the requested 'rev')
                         # Maybe it is an uncommitted (yet staged) file ?
@@ -2211,6 +2268,7 @@ proc inquire-git {revs msgRet} {
                         # seen when NO pairs remain & TkDiff subsequently bails
                         set MSG "FAILED: 'git show $rev($i):$file':\n$gitERR"
                         if {$i == 1} {incr ndx -1; break} {incr ndx -2}
+                        debug-info "$MSG"
                     }
                 }
             } else {
@@ -2255,10 +2313,9 @@ proc inquire-svn {revs msgRet} {
     # Ask Svn which items got committed between the given endpoint(s)
     #   do we need/want "--depth files" ???
     # N.B> this might get messy with URL/PEG/date notations!!!
-    set result [run-command "svn diff --summarize -r $cmit(1)$cmit(2)"]
-    set svnOUT [lindex $result 0]
-    if {[set svnRC [lindex $result 2]] || $svnOUT == ""} {
-        set svnERR [lindex $result 1]
+    set cmd "svn diff --summarize -r $cmit(1)$cmit(2)"
+    lassign [run-command $cmd] svnOUT svnERR svnRC
+    if {$svnRC || $svnOUT == ""} {
         if {$svnRC == 0} {
             set MSG "Svn diff shows NO output using rev: $cmit(1)$cmit(2)"
         } else {set MSG "Svn diff FAILED:\n$svnERR"}
@@ -2276,12 +2333,53 @@ proc inquire-svn {revs msgRet} {
     #      xM   -(2nd M) properties modified
     # Note, "svn diff --summarize" unfortunately reports a CONFLICTED file
     # as 'M' as well, so we need to analyze a bit further
-    # (because diffing of the embedded 'markers' would not be very usefull)
+    # (because diffing of the embedded 'markers' is not very usefull)
 
     set ndx 0
     foreach ln [split $svnOUT "\n"] {
         if {[lindex $ln 0] eq "M"} {
             set file [string range $ln 8 end]
+
+            # If *is* a CONFLICTed file, split it up and store the finfo data
+            if {$revs < 2 && [string match "C*" [exec svn status -q $file]]} {
+                # SVN gives us a few ways to go:
+                #   We COULD split-up the conflicted file, or just GRAB the 3
+                #   files that it stores as "extra" files for us - we will
+                #   try the latter (provided the number is THREE), otherwise...
+                if {[file exists $file.mine] \
+                &&  2 == [llength [set Flist [glob -path $file .r*]]]} {
+                    # So now we have 2 files w/2 distinct Revs, the EARLIER
+                    # of which is the ancestor - populate Cflct accordingly
+                    set x [string length $file]
+                    set x0 [string replace [lindex $Flist 0]  0 $x+1 {}]
+                    set x1 [string replace [lindex $Flist 1]  0 $x+1 {}]
+                    lappend Cflct $file.r[max $x0 $x1] $file.mine
+                    lappend Cflct   ".r[max $x0 $x1]"    ".mine"
+                    lappend Cflct $file.r[min $x0 $x1] ".r[min $x0 $x1]"
+                } else { set Cflct [split-conflictfile $file] }
+
+                # Setup finfo(xxx) per data collected into 'Cflct'
+                #  Note these are EDITTABLE unless we REALLY did split it
+                if {[get-file [lindex "$Cflct" 0] [incr ndx]]} {incr ndx -1} {
+                    if {![get-file [lindex "$Cflct" 1] [expr {1+$ndx}]]} {
+                        set finfo(lbl,$ndx)       "SVN-Cflct[lindex "$Cflct" 2]"
+                        # (naming juggles slightly if ancestor wont exist)
+                        if {[llength $Cflct] < 6} {
+                            set finfo(tmp,$ndx) ""
+                            set finfo(lbl,[incr ndx]) "$file.mine (SVN-WC)"
+                        } {set finfo(lbl,[incr ndx]) "[lindex $Cflct 3] (SVN-WC)"}
+                        if {[llength $Cflct] < 6} {set finfo(tmp,$ndx) "" }
+                    } {array unset finfo "\[pl]*,$ndx" ; incr ndx -1; continue}
+
+                    if {[llength $Cflct] == 6} {
+                        set finfo(apth,[expr {$ndx / 2}])  [lindex $Cflct 4]
+                        set finfo(albl,[expr {$ndx / 2}]) "[lindex $Cflct 5] (SVN Cflct)"
+                    }
+                }
+                continue
+            }
+
+            # otherwise its a plain old difference
             foreach i {1 2} {
                 incr ndx
                 if {"" != $rev($i)} {
@@ -2330,11 +2428,9 @@ proc inquire-cvs {revs msgRet} {
     }
 
     # Ask CVS what changed between the given endpoint(s)
-    set outfile [tmpfile "cvsout" 0]
-    set result [run-command "cvs diff -l --brief -r $cmit(1)$cmit(2)" $outfile]
-    set cvsOUT [lindex $result 0]
-    set cvsERR [lindex $result 1]
-    set cvsRC [lindex $result 2]
+    set outfile [tmpfile "cvsout" 1]
+    set cmd "cvs diff -l --brief -r $cmit(1)$cmit(2)"
+    lassign [run-command $cmd $outfile] na cvsERR cvsRC
     # cvsRC can be non-zero in many cases,
     #   for example: if a file doesn't have one of the revs
     #   Thus it isn't very meaningful or helpfull here; however,
@@ -2348,6 +2444,7 @@ proc inquire-cvs {revs msgRet} {
     set fp [open $outfile r]
     set cvsOUT [read $fp]
     close $fp
+    file delete $outfile
     if {[string match {*Diffing*} $cvsERR] } {
         if {$cvsOUT == ""} {
             set MSG "CVS diff shows NO output using -r $cmit(1)$cmit(2)"
@@ -2358,7 +2455,7 @@ proc inquire-cvs {revs msgRet} {
     # Expected output form will look like:
     # Index: File2.txt
     # ===================================================================
-    # RCS file: /home/dorothyr/testdir/CVS_REPOSITORY/cvs_test/File2.txt,v
+    # RCS file: /home/userid/path-into-repository/File2.txt,v
     # retrieving revision 1.5
     # diff --brief -r1.5 File2.txt
     # Files /var/tmp/cvsdBUe0v and File2.txt differ
@@ -2366,28 +2463,78 @@ proc inquire-cvs {revs msgRet} {
     # cvs diff: FileAdd.txt is a new entry, no comparison available
     # Index: Ftrunk.txt
     # ===================================================================
-    # RCS file: /home/dorothyr/testdir/CVS_REPOSITORY/cvs_test/Ftrunk.txt,v
+    # RCS file: /home/userid/path-into-repository/Ftrunk.txt,v
     # retrieving revision 1.5
     # diff --brief -r1.5 Ftrunk.txt
     # Files /var/tmp/cvs3Wrp6F and Ftrunk.txt differ
 
     # Note, cvs diff --brief doesn't report a conflicted file differently, and
-    # cvs update -p will throw an error, unlike svn cat -p
+    # cvs update -p will throw an error (unlike svn cat -p) making identifying
+    # such files imperative - we also need its Revision (to locate an ancestor)
+    # - UNLESS 2 Revs were provided (as that precludes using ANY WC files)
 
     set ndx 0
     foreach ln [split $cvsOUT "\n"] {
-        if {[string match "Index:*" $ln]} {
-            set file [string trim [lindex $ln 1]]
+        if {[string match "Index: *" $ln]} {
+            # Grab the filename ...
+            set fn [lindex $ln 1]
+            set Cflct 0 ;# ... then check for a CONFLICTed file (presumed: NO)
+            if {$revs < 2} {
+               # Sadly, CVS does not provide RELATIVE revision references
+               # (cant ask for 'parent' Rev of a file) so are forced to ask for
+               # a 'cvs status' to both check for CONFLICT and get its revision
+               # then simulate a 'parent' conversion ourselves (subtract 0.1)
+               foreach ln [split [exec cvs status $fn] "\n"] {
+                  if {!$Cflct && [string match "*Unresolved Conflict" $ln]} {
+                     set Cflct 1 } \
+                  elseif {$Cflct && [string match "*Working rev*" $ln]} {
+                     # We want the last digits (Cf) of its revision value (Cr)
+                     set Cflct [lindex [set Cr [split [lindex $ln 2] "."]] end]
+                     lset Cr {end} [incr Cflct -1] ;# Compute PARENT Revision!
+                     break
+                  }
+               }
+            }
+
+            # If *is* a CONFLICTed file, split it up and store the finfo data
+            if {$Cflct} {set Cflct [split-conflictfile $fn]
+
+                if {[get-file [lindex "$Cflct" 0] [incr ndx]]} {incr ndx -1} {
+                    if {![get-file [lindex "$Cflct" 1] [expr {1+$ndx}]]} {
+                        set finfo(tmp,$ndx) ""
+                        set finfo(lbl,$ndx)       "CVS-Cflct[lindex "$Cflct" 2]"
+                        set finfo(lbl,[incr ndx]) "[lindex "$Cflct" 3] (CVS-WC)"
+                        set finfo(tmp,$ndx) ""
+                    } {array unset finfo "\[pl]*,$ndx" ; incr ndx -1; continue}
+
+                    # OK - When CVS conflicts a file, it ALSO plants the prior
+                    # data as a hidden file in the WC - THAT is *ALMOST* our
+                    # ancestor - actually its the ancestor PLUS our mods
+                    # (what existed just BEFORE the "update" ran). We COULD go
+                    # get the REAL ancestor, but this may be good enough ...
+                    # Grab it if it exists
+                    #   (some CVS admins MAY have set up processes to delete it
+                    #   after a few days wait time - perhaps THAT is when we
+                    #   should try extracting the REAL one?)
+                    if {[file exists [set Afn ".#$fn.[join $Cr "."]"]]} {
+                        set finfo(apth,[expr {$ndx / 2}]) "$Afn"
+                        set finfo(albl,[expr {$ndx / 2}]) "$Afn (CVS Cflct)"
+                    }
+                }
+                continue
+            }
+
+            # otherwise its a plain old difference
             foreach i {1 2} {
                 incr ndx
                 if {"" != $rev($i)} {
-                    if {[get-file-rev $file $ndx $rev($i) CVS]} {
+                    if {[get-file-rev $fn $ndx $rev($i) CVS]} {
                         if {$i == 1} {incr ndx -1; break} {incr ndx -2}
                     }
                 } else {
                     # Just point at REAL 'working copy' files (allows editing)
-                    set finfo(lbl,$ndx) "$file (CVS--WC)"
-                    set finfo(pth,$ndx) $file
+                    set finfo(lbl,$ndx) "$fn (CVS--WC)"
+                    set finfo(pth,$ndx) $fn
                 }
             }
         }
@@ -2407,7 +2554,7 @@ proc create-display {} {
     # menubar - the menubar (duh)
     # toolbar - the toolbar (duh, again)
     # client  - the area with the text widgets and the graphical map
-    # status us         - a bottom status line
+    # status  - a bottom status line
 
     # this block of destroys is MOSTLY for stand-alone testing of the GUI code,
     # and could be blown away (except for .status), or not, if we want to
@@ -2705,11 +2852,10 @@ proc pane_drag {win x} {
 }
 
 ###############################################################################
-# build the main client display (the text widgets, scrollbars, that
-# sort of fluff)
+# build the main client display (text widgets, scrollbars, that sort of fluff)
 ###############################################################################
 proc build-client {} {
-    global g w opts map tk_version
+    global g w opts tk_version
     debug-info "build-client ()"
 
     frame $w(client) -bd 2 -relief flat
@@ -2800,10 +2946,9 @@ proc build-client {} {
     # one can compare character by character if necessary.
     text $w(BottomText) -wrap none -borderwidth 1 -height 2 -width 0
 
-    # this is how we highlight bytes that are different...
-    # the bottom window (lineview) uses reverse video to highlight
-    # diffs, so we need to figure out what reverse video is, and
-    # define the tag appropriately
+    # this is BASICALLY how we highlight those bytes that are different...
+    # the bottom window (lineview) uses a tag to highlight mismatches,
+    # so we need to configure that tag as requested
     $w(BottomText) tag configure diff {*}$opts(bytetag)
 
     # Set up text tags for the 'current diff' (the one chosen by the 'next'
@@ -2823,24 +2968,28 @@ proc build-client {} {
     }
 
     # build the map...
-    # we want the map to be the same width as a scrollbar, so we'll
-    # steal some information from one of the scrollbars we just
-    # created...
-    set cwidth [winfo reqwidth $w(LeftVSB)]
-    set ht [$w(LeftVSB) cget -highlightthickness]
-    set cwidth [expr {$cwidth -($ht*2)}]
+    #   we want the map to basically resemble a scrollbar, so we'll
+    #   steal some information from one of the scrollbars we just created...
     set color [$w(LeftVSB) cget -troughcolor]
+    set ht [$w(LeftVSB) cget -highlightthickness]
+    set cwidth [expr {[winfo reqwidth $w(LeftVSB)] - ($ht * 2)}]
 
-    set map [frame $w(client).map -bd 1 -relief sunken -takefocus 0 \
-      -highlightthickness 0]
-
-    # now for the real map...
-    image create photo map
+    # At the widget level, its just a frame holding a canvas...
+    frame $w(map) -bd 1 -relief sunken -takefocus 0 -highlightthickness 0
 
     canvas $w(mapCanvas) -width [expr {$cwidth + 1}] \
       -yscrollcommand map-resize -background $color -borderwidth 0 \
       -relief sunken -highlightthickness 0
-    $w(mapCanvas) create image 1 1 -image map -anchor nw
+
+    # ... but for the REAL map,  we want an IMAGE we can draw into INSERTED
+    # in that canvas, along with  (dummy) linework for a 'scrollbar thumb'
+    #   N.B> coords (number of, nor values) dont matter, as 'map-move-thumb'
+    #   REWRITES them as a properly positioned, hollow, 3D rectangle (later on)
+    set w(mapImg) [image create photo]
+
+    $w(mapCanvas) create image 1 1 -image $w(mapImg) -anchor nw
+    $w(mapCanvas) create line 0 0 0 0 -width 1 -tags thumbUL -fill white
+    $w(mapCanvas) create line 1 1 1 1 -width 1 -tags thumbLR -fill black
     pack $w(mapCanvas) -side top -fill both -expand y
 
     # I'm not too pleased with these bindings -- it results in a rather
@@ -2905,7 +3054,7 @@ proc build-client {} {
     grid $w(LeftLabel) -row 0 -column 0 -sticky ew
     grid $w(RightLabel) -row 0 -column 2 -sticky ew
     grid $leftFrame -row 1 -column 0 -sticky nsew -rowspan 2
-    grid $map -row 1 -column 1 -stick ns
+    grid $w(map) -row 1 -column 1 -stick ns
     grid $w(client).grip -row 2 -column 1
     grid $rightFrame -row 1 -column 2 -sticky nsew -rowspan 2
 
@@ -2930,9 +3079,10 @@ proc build-client {} {
 
     set g(activeWindow) $w(LeftText) ;# establish a default
 
+    # Finally, we need wrappers for the main text procs to monitor
+    # line selections (for loading the line comparison widget)
     rename $w(RightText) $w(RightText)_
     rename $w(LeftText) $w(LeftText)_
-
     proc $w(RightText) {command args} $::text_widget_proc
     proc $w(LeftText) {command args} $::text_widget_proc
 }
@@ -3152,7 +3302,7 @@ set text_widget_proc {
             set right [$w(RightText)_ get $i0 $i1]
             $w(BottomText) delete 1.0 end
             $w(BottomText) insert end "< $left\n> $right"
-            # find characters that are different, and underline them
+            # find characters that are different, and hilite/tag them
             if {$left != $right} {
                 set left [split $left {}]
                 set right [split $right {}]
@@ -3166,6 +3316,7 @@ set text_widget_proc {
                     }
                     incr c
                 }
+                # no need to draw attention to the 'NL' chars
                 $w(BottomText) tag remove diff "1.0 lineend"
                 $w(BottomText) tag remove diff "2.0 lineend"
             }
@@ -4092,7 +4243,7 @@ proc toolbtnEvent {event w {isToolbutton 1}} {
 }
 
 ###############################################################################
-# move the map thumb to correspond to current shown merge...
+# move the map thumb to correspond w/current shown text (just like a scrollbar)
 ###############################################################################
 proc map-move-thumb {y1 y2} {
     global g w
@@ -4132,7 +4283,7 @@ proc map-move-thumb {y1 y2} {
 }
 
 ###############################################################################
-# Bind keys for Next, Prev, Center, Merge choices 1 and 2
+# Bind keys for Next, Prev, Center, Merge choices 1, 2, 12 and 21
 #
 # N.B. This is GROSS! It might have been necessary in earlier versions,
 # but now I think it needs a serious rewrite. We are CURRENTLY overriding
@@ -4914,12 +5065,22 @@ proc applypref {} {
         }
     }
 
+    # Same for the (only) tag for the line-comparison widget ...
     if {[catch "$w(BottomText) tag configure diff $tmpopts(bytetag)"]} {
         do-error "Invalid settings for \"$pref(bytetag)\": \
         \n\n'$tmpopts(bytetag)' is not a valid option string"
         # Again, if it fails, restore the prior 'good' setting
         eval "$w(BottomText) tag configure diff $opts(bytetag)"
         return
+    }
+
+    # ... but if that tag contained a font request, we want to elevate that
+    # font to the entire widget (lest it obscure the windows basic purpose)
+    # INCLUDING the possible need to re-cfg the window height to match
+    if {[set bHiFont [$w(BottomText) tag cget diff -font]] ne ""} {
+        if {$bHiFont ne [$w(BottomText) cget -font]} {
+            $w(BottomText) configure -font "$bHiFont" -height 2
+        }
     }
 
     # tabstops require a little extra work. We need to figure out
@@ -5090,7 +5251,7 @@ proc applypref {} {
             eval $inlActn 1 ;# recompute the inlines, but tag ONLY them
         }
         # chgd map colors (in a map that IS or COULD go visible) ?
-        if {$remap > 0} {map-draw map $g(mapwidth) $g(mapheight)}
+        if {$remap > 0} {map-draw $g(mapwidth) $g(mapheight)}
     }
 
     # Align, (show or hide) various data (Lnums, Cbars, etc.), and we are done
@@ -5263,10 +5424,8 @@ proc vscroll-sync {id y0 y1} {
 ###############################################################################
 # Draw a miniature map of the diff regions
 ###############################################################################
-proc map-draw {name mapwidth mapheight} {
-    global g w opts map
-
-    set map $name
+proc map-draw {mapwidth mapheight} {
+    global g w opts
 
     # Text widget always contains blank line at the end
     set lines [expr {double([$w(LeftText) index end]) - 2}]
@@ -5274,8 +5433,8 @@ proc map-draw {name mapwidth mapheight} {
 
     # We add some transparent stuff to make the map fill the canvas
     # in order to receive mouse events at the very bottom.
-    $map blank
-    $map put \#000 -to 0 $mapheight $mapwidth $mapheight
+    $w(mapImg) blank
+    $w(mapImg) put \#000 -to 0 $mapheight $mapwidth $mapheight
 
     # Paint color stripes per type of every hunk
     foreach hID $g(diff) {
@@ -5294,18 +5453,12 @@ proc map-draw {name mapwidth mapheight} {
              }
         }
 
-        $map put $color -to 0 $y $mapwidth [expr {$y + $size}]
+        $w(mapImg) put $color -to 0 $y $mapwidth [expr {$y + $size}]
 
     }
 
-    # let's draw a rectangle to simulate a scrollbar thumb. The size
-    # isn't important since it will get resized when map-move-thumb
-    # is called...
-    $w(mapCanvas) create line 0 0 0 0 -width 1 -tags thumbUL -fill white
-    $w(mapCanvas) create line 1 1 1 1 -width 1 -tags thumbLR -fill black
-    $w(mapCanvas) raise thumb
-
-    # now, move the thumb
+    # replot the 'thumb' on top
+    # implicitly handles a shift in position (if being called by map-resize)
     eval map-move-thumb [$w(LeftText) yview]
 
 }
@@ -5344,7 +5497,7 @@ proc map-resize {args} {
     set g(mapwidth) [winfo width $w(map)]
     set g(mapheight) $mapheight
 
-    map-draw map $g(mapwidth) $g(mapheight)
+    map-draw $g(mapwidth) $g(mapheight)
 }
 
 ###############################################################################
@@ -5832,8 +5985,7 @@ proc merge-center {} {
 }
 
 ###############################################################################
-# Update the merge preview window with the current merge choice
-# newversion   1 or 2, new merge choice
+# Update the merge preview window with the designated (1,2,12,21) merge choice
 ###############################################################################
 proc do-merge-choice {newversion} {
     global g w opts
@@ -5854,7 +6006,7 @@ proc do-merge-choice {newversion} {
                      { unset g(overlap$hID)
                        set-tag $hID currtag overlaptag
                        if {$g(mapheight) > 0} \
-                           {map-draw map $g(mapwidth) $g(mapheight)}
+                           {map-draw $g(mapwidth) $g(mapheight)}
                      }
         }]
     }
@@ -6815,7 +6967,7 @@ proc mark-diffs {{rmvrpl {}}} {
     if {$g(count)} {merge-add-marks $rmvrpl}
 
     # Lastly, ensure the MAP reflects the CURRENT diffs and go (re-)TAG it all
-    if {$g(mapheight) > 0} {map-draw map $g(mapwidth) $g(mapheight)}
+    if {$g(mapheight) > 0} {map-draw $g(mapwidth) $g(mapheight)}
     remark-diffs
     return $g(count)
 }
@@ -7067,20 +7219,17 @@ proc rediff {} {
     }
     show-status "Executing \"$diffcmd\""
 
-    set result [run-command "$diffcmd"]
-    set stdout [lindex $result 0]
-    set stderr [lindex $result 1]
-    set exitcode [lindex $result 2]
-    set g(returnValue) $exitcode
+    lassign [run-command "$diffcmd"] diffOUT diffERR diffRC
+    set g(returnValue) $diffRC
 
     # The exit code is 0 if there are no differences and 1 if there
     # are differences. Any other exit code means trouble
-    if {$exitcode < 0 || $exitcode > 1 || $stderr != ""} {
-        do-error "diff failed:\n$stderr"
+    if {$diffRC < 0 || $diffRC > 1 || $diffERR != ""} {
+        do-error "diff failed:\n$diffERR"
     }
 
     # If there is no output and we got this far the files are equal ...
-    if {"[set lines [split $stdout "\n"]]" != ""} {
+    if {"[set lines [split $diffOUT "\n"]]" != ""} {
 
         # ... otherwise check if the first line begins with a line number.
         # If not there was trouble and we abort. For instance, using a binary
@@ -7089,7 +7238,7 @@ proc rediff {} {
         if {[string match {[0-9]*} $lines]} {
             # There ARE diffs!
             lappend lines "0" ;# Cheap trick: add sentinel to flush next loop
-        } else {fatal-error "diff failed:\n$stdout"}
+        } else {fatal-error "diff failed:\n$diffOUT"}
     }
 
     # Collect all lines containing diff hunk headers
@@ -7177,14 +7326,11 @@ proc rediff {} {
             append diffcmd " {$finfo(pth,$NDX)} {$finfo(apth,$pairnum)}"
 
             show-status "Executing \"$diffcmd\""
-            set result [run-command "$diffcmd"]
-            set stdout [lindex $result 0]
-            set stderr [lindex $result 1]
-            set exitcode [lindex $result 2]
-            if {$exitcode < 0 || $exitcode > 1 || $stderr != ""} {
-                fatal-error "diff3 failed:\n$stderr"
+            lassign [run-command "$diffcmd"] diffOUT diffERR diffRC
+            if {$diffRC < 0 || $diffRC > 1 || $diffERR != ""} {
+                fatal-error "diff3 failed:\n$diffERR"
             }
-            set lines [split $stdout "\n"]
+            set lines [split $diffOUT "\n"]
             set g(d3$LR) {}
             foreach line $lines {
                 if {[string match {[0-9]*} $line]} {
@@ -7350,7 +7496,7 @@ proc recompute-diff {} {
 # Wipe most everything and then kick off a rediff.
 ###############################################################################
 proc do-diff {} {
-    global g opts map errorInfo
+    global g opts errorInfo
     debug-info "do-diff ()"
 
     wipe-window
@@ -7625,6 +7771,11 @@ proc newDiffDialog {} {
     set waitvar {}
     customize-initLabels ;# Needed for access to global 'pref' array
 
+    # Snapshot the current state of the primary INPUT variables into a global
+    # location (so that the 'Cancel' button callback can find/restore them)
+    #   N.B> only preserves FINFO data (sadly, OTHER chgs will remain active)
+    set g(priorVals) [array get finfo {[fr]*[0-2]}]
+
     if {![info exists w(newDiffPopup)]} {
         set w(newDiffPopup) .newDiffPopup
         debug-info " creating $w(newDiffPopup)"
@@ -7659,7 +7810,7 @@ proc newDiffDialog {} {
         label $simple.l1  -text "FSpec 1:"
         set w(newDiffPopup,FSpec1) \
         [entry $simple.e1 -textvariable finfo(f,1) -vcmd {scm-updat scm1 %W %P}]
-        entry $simple.er1 -textvariable finfo(rev,1) -validate key \
+        entry $simple.er1 -textvariable finfo(rev,1) \
                       -vcmd [list occupancy [label $simple.lr1 -text "-r"] %P]
 
         label $simple.l2  -text "FSpec 2:"
@@ -7667,6 +7818,7 @@ proc newDiffDialog {} {
         [entry $simple.e2 -textvariable finfo(f,2) -vcmd {scm-updat scm2 %W %P}]
         entry $simple.er2 -textvariable finfo(rev,2) -validate key \
                       -vcmd [list occupancy [label $simple.lr2 -text "-r"] %P] 
+        $simple.er1 configure -validate key ;# allow validation AFTER .er2 exists
         $simple.er1 validate
         $simple.er2 validate
 
@@ -7778,6 +7930,7 @@ proc newDiffDialog {} {
                      }
         button $commands.cancel -text "Cancel" -width 5 -default normal \
             -command { if {! [winfo exists .client]} {do-exit}
+                       array set finfo $g(priorVals) ;# restore start values
                        wm withdraw $w(newDiffPopup); set waitvar 0
                      }
         pack $commands.ok $commands.cancel -side left -fill none -expand y \
@@ -9026,16 +9179,16 @@ proc do-usage {mode} {
         (Note that a FILESPEC is either a file or a directory and
          optional parameters are documented here in square brackets)
 
-    Interactive selection of files to compare:
+    (1) Interactive selection of files to compare:
         tkdiff
 
-    Plain files:
+    (2) Plain files:
         tkdiff FILESPEC1 FILESPEC2
 
-    Plain file with conflict markers:
+    (3) Plain file with conflict markers:
         tkdiff -conflict FILE
 
-    Source control (AccuRev, BitKeeper, ClearCase, CVS, Git, Mercurial,\
+    (4) Source control (AccuRev, BitKeeper, ClearCase, CVS, Git, Mercurial,\
       Perforce, PVCS, RCS, SCCS, Subversion)
         tkdiff  -rREV1 [-rREV2]  FILESPEC1 [FILESPEC2]
         tkdiff [-rREV1 [-rREV2]]            (Search: CVS, Git or Subversion)
@@ -9064,7 +9217,7 @@ Classically speaking, a diff is a <itl>directed</itl> comparison of two text\
       <cmp>FILESPEC</cmp> encountered is <bld>usually</bld> the "Left" and the\
       next would be the "Right". Revision specifications work similarly.
       However, $g(name) occasionally <itl>infers</itl> an argument (be it\
-      'filespec' or 'revision') to satisfy the need for two items to compare.\
+      'Filespec' or 'Revision') to satisfy the need for two items to compare.\
       When this occurs, $g(name) will attempt to access a <bld>S</bld>ource\
       <bld>C</bld>ode <bld>M</bld>anagement (SCM: see below) system to provide\
       the missing item, but it will <itl>ALSO</itl> force that item to be the\
@@ -9075,8 +9228,8 @@ Classically speaking, a diff is a <itl>directed</itl> comparison of two text\
 
 In the first form, $g(name) will <itl>almost always</itl> present a dialog to\
       allow you to choose the files to diff (subject only to a preference\
-      setting '<itl>$pref(autoSrch)</itl>' described on the "Preferences" Help\
-      page).
+      setting '<itl>$pref(autoSrch)</itl>' described in the "On Preferences"\
+      Help page).
       This dialog, known as the <btn>new Diff</btn> dialog, provides an\
       interactive means of specifying the majority of command line parameters.\
       However, note that while the command line uses repetition to distinguish\
@@ -9091,9 +9244,10 @@ In the first form, $g(name) will <itl>almost always</itl> present a dialog to\
       settings, the dialog allows you to adjust the final interpretation\
       within the bounds of all <itl>presently entered</itl> parameters, which\
       is to say the dialog will continually readjust as values are enterred\
-      or removed. One of the clear advantages of the dialog is the ability\
-      to "Browse" to files or directories, although typing is still valid.
-      In contrast to the preference-controlled 'automatic' search mode of the
+      or removed. One of the clear advantages of the dialog, besides the\
+      instantaneous reaction to individual argument adjustments, is an ability\
+      to "Browse" to files or directories, although typing is still valid.\
+      In contrast to the preference-controlled 'automatic' search mode of the\
       command line, requesting that mode via the dialog is handled via a\
       checkbox, that will present when conditions indicate it is possible.
       Please note that <itl>most</itl> of the "Additional optional parameters"\
@@ -9127,11 +9281,14 @@ The fourth form is conditional on $g(name) being able to detect a viable SCM\
       <bld>may</bld> effectively override the first form as described earlier\
       (i.e. interactive startup). Presently only "CVS", "Git" or "Subversion"\
       SCM systems will behave this way, when invoked with no arguments as is\
-      suggested here in this form as syntactically possible.
+      suggested in this form as syntactically possible. The determining\
+      factor (as to accessing the interactive dialog or not) is controlled by\
+      the preference setting '<itl>$pref(autoSrch)</itl>', more fully\
+      described in the "On Preferences" Help page.
 
 <hdr>Source Code Control</hdr>
-In all the SCM forms, $g(name) will detect which SCM system are possible. This\
-      detection supports RCS, CVS and SCCS by looking for a directory\
+In all the SCM forms, $g(name) will detect which SCM system(s) are possible.\
+      This detection supports RCS, CVS and SCCS by looking for a directory\
       with the same name, although RCS can also be detected via its ",v" file\
       naming suffix convention. It detects and supports PVCS by looking for a\
       vcs.cfg file. It detects and supports AccuRev, Perforce and ClearCase\
@@ -9190,10 +9347,10 @@ Because there are potentially two <cmp>FILESPEC</cmp>s there can also be two\
 Additionally, some SCM systems provide abilities that can identify which of\
       their files are <itl>different</itl> given <itl>only</itl> some set of\
       desired revisions (including defaulted). $g(name), using its capacity\
-      for accepting multiple pairings, will attempt to access the utilities\
-      it knows about to obtain such as an input source. SCM systems lacking\
-      this ability will simply reject the existing command arguments as\
-      inadequate with an error message.
+      for accepting multiple pairings, will attempt to access those utilities\
+      it knows about to obtain such as an input source. We call this a "search"\
+      or "inquiry" mode. SCM systems lacking this ability will simply reject\
+      any provided Revision arguments as inadequate with an error message.
       Note that given the <bld>lack</bld> of a <cmp>FILESPEC</cmp> in this\
       instance, such SCM utilities basically expect the CWD (of, in this case,\
       $g(name)) to <bld>be</bld> within the "WC" of the files they manage.\
@@ -9206,7 +9363,7 @@ Additionally, some SCM systems provide abilities that can identify which of\
       the <bld>Git</bld> SCM has an unusual arrangement in that an intermediate\
       UNNAMED revision (referred to as the 'stage' or 'index') sits between\
       the working copy and the last commit; $g(name) will allow you to specify\
-      this quasi-revision using a revision value of " " (blanks) either on the\
+      this quasi-revision using a revision value of " " (blank) either on the\
       commandline or in the GUI dialog. Remember that on the commandline this\
       will require quoting (to be parsed correctly). For the dialog, the field\
       <bld>label</bld> for the revision will be dimmed when it is EMPTY, as it\
@@ -9294,7 +9451,7 @@ The remaining options perform the following services:
       other. Oftentimes the intent of the merge (back porting, etc.) and\
       the order of files on the command line can dictate which file should\
       be treated as the contributing "source" for the eventual merge output.
-      Debug output (<cmp>-d</cmp>) while not really meant for the average\
+      Debug output (<cmp>-d</cmp>), while not really meant for the average\
       user, is simply mentioned here for completeness sake.
 
 <hdr>Network latency</hdr>
@@ -9317,7 +9474,7 @@ $g(name) does not, itself, require network access to run. However, certain\
       $g(name) <itl>will remove</itl> the status display itself when the main\
       display is ready. <itl>Unfortunately</itl>, due to inadequacies in the\
       MacOS X graphics support (Aqua), this messaging feature is unavailable\
-      on that platform.
+      on that platform at this time.
 
 <hdr>The Diff engine (and more quoting)</hdr>
 Although $g(name) was designed as a frontend to the classic, UNIX derived,\
@@ -9358,7 +9515,7 @@ or
 Note in each case, the quoting of BOTH the flag and its value\
       <itl>together</itl>. But particularly, in the second form, note the extra\
       quoting (done with escaped double quotes or "brace" characters as shown)\
-      surrounding the value as well; this demonstrates how to pass an flag that
+      surrounding the value as well; this demonstrates how to pass an flag that\
       MUST be separated from the value it passes. Be aware that <itl>single\
       quotes will NOT work</itl> here. The "brace" character is simply the\
       lexical mechanism used by the internals of $g(name) to quote its content\
@@ -10073,8 +10230,8 @@ This setting is actually a pair of values, describing which SCM you prefer to\
       reasons, besides this, for that possibility. Note however, that because\
       of subtle differences between the two ways of starting the tool: the\
       command line or the dialog; 'None' is generally <itl>ignored</itl> for\
-      command line uses, while it behaves as a preferred value on the dialog
-      <itl>until</itl> the dialog is actually accepted.
+      command line uses, while it will behave as a <itl>preferred</itl> value\
+      on the dialog, until the dialog is actually accepted.
 
 <bld>$pref(predomMrg)</bld>
 
@@ -10086,11 +10243,14 @@ This setting decides, for those cases where no specific reason (such as an\
       Determining how best to toggle this setting involves not only the order\
       of files as provided initially, but also on the specific goals\
       envisioned by the user for the merge as a whole. For example, if\
-      back-porting some specifc capability, it might be best to select the\
+      back-porting some specific capability, it might be best to select the\
       side of the older file, and then only interactively merge the needed\
       individual regions from the newer one.
-      This option only comes into play when a Diff is invoked, as every region\
-      must ultimately posess <itl>SOME</itl> setting prior to being displayed.
+      This option generally only comes into play when a Diff is invoked,\
+      although it may also apply when <btn>Split</btn> or <btn>Combine</btn>\
+      is used and there was no <itl>other</itl> reason to choose a side,\
+      as every region must ultimately posess <itl>SOME</itl> setting prior to\
+      being displayed.
 
 <hdr>Display</hdr>
 
@@ -10182,10 +10342,12 @@ If <bld>set</bld>, show a window at the bottom of the display that shows the\
       current line from each file, one on top of the other. Clicking on any\
       specific line in either text window selects which line will be displayed.\
       This window is most useful to do a byte-by-byte comparison of a line that\
-      has changed; by default, mismatched bytes are marked with underlines,\
-      but other possibilities include configuring with a "constant width" font\
-      (via <itl>$pref(bytetag)</itl>) such as "Courier" to easily spot the\
-      differences.
+      has changed; by default, the display begins with text rendered the same\
+      as in the main display, with mismatched bytes marked with underlines,\
+      and a blue background and white foreground, but other possibilities\
+      include configuring with a "constant width" font\
+      (via <itl>$pref(bytetag)</itl>) such as "Courier" to more easily spot\
+      the differences, or perhaps a different foreground color.
 If <bld>unset</bld>, the window will not be shown.
 
 <hdr>Appearance</hdr>
@@ -10242,8 +10404,11 @@ This is a list of Tk text widget tag options that are applied to differences\
 <bld>$pref(bytetag)</bld>
 
 This is a list of Tk text widget tag options that are applied to individual\
-      characters in the line view. These options do not affect the main text\
-      displays.
+      differing characters in the line view. These options do not affect the\
+      main text displays. Note that if a font specification is also included,\
+      that font will be used for <itl>ALL</itl> the characters, not just the\
+      differing ones. If you remove all settings, text will appear as it does\
+      in the main displays, with <bld>NO</bld> difference highlighting at all.
 
 <bld>$pref(tabstops)</bld>
 
