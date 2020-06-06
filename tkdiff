@@ -1625,7 +1625,7 @@ proc commandline {} {
                     # Force set the Rev version (if it was supplied)
                     if {"$rev" != ""} { set finfo(rev,0) "$rev" }
                     # In any event, strip-off the version SYNTAX from the URL
-                    set path [string trimright "$arg" "@$rev"]
+                    set path [string trimr "[string trimr "$arg" "$rev"]" "@"]
                 }
                 # Finally loading the Ancestor "filename" where it belongs
                 set finfo(f,0) "$path"
@@ -1731,7 +1731,7 @@ proc commandline {} {
                     } else {incr URLs ; incr revs}
 
                     # In any event, strip-off the version SYNTAX from the URL
-                    set path [string trimright "$arg" "@$rev"]
+                    set path [string trimr "[string trimr "$arg" "$rev"]" "@"]
 
                 # else its just a plain old Fspec; Just count and record
                 } else { set path $arg ; incr pths }
@@ -8433,13 +8433,13 @@ proc newDiffDialog {} {
         button $commands.ok -text "Ok" -width 5 -default active \
             -command {
                 if {![file isfile $finfo(f,1)]} {set g(conflictset) 0};# illegal
-                # Because of the call-semantics for 'assemble-args', the
-                # primary Fspecs (f,1 & f,2) MUST NOT leave here w/VERSIONED
+                # Because of the call-semantics for 'assemble-args', ALL
+                # Fspecs (f,0 f,1 & f,2) MUST NOT leave here w/VERSIONED
                 # URLs ... (vrsn(s) were ALREADY diverted properly elsewhere)
                 foreach x "f,0 f,1 f,2" {
                     if {[regexp {^[^/]+://[^/]+/.*?@[0-9]+$} $finfo($x)]} {
-                        set finfo($x) \
-                                "[string trimright "$finfo($x)" "@ 0123456789"]"
+                        set finfo($x) "[string trimright \
+                           "[string trimright "$finfo($x)" "0123456789"]" "@"]"
                     }
                 }
                 set waitvar 1
