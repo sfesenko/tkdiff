@@ -7351,6 +7351,7 @@ proc rediff {} {
         set Statmsg ">> NO ACTION TAKEN << due to errors"
         set diffOUT {}
         set diffRC 0
+        set lines {};   # Simulate 'identical' to avoid issues
     } elseif {"[set lines [split $diffOUT "\n"]]" != "" && $diffRC} {
         # Historical note: OLDER 'diff' vrsns USED to produce:
         #   "Binary files ..(names).. are different" ON stdout WITH RC=1
@@ -7863,7 +7864,7 @@ proc rediff {} {
             # diff, this HAS to be the reason there just ARE zero hunks!
             set Statmsg "Files are identical"
         }
-        after idle {show-status $Statmsg }
+        eval after idle {show-status "{$Statmsg}"}
         buttons disabled
     }
 }
