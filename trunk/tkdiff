@@ -3627,9 +3627,9 @@ proc build-menubar {} {
       [list diffmark clear] -underline 0
 
     set "g(tooltip,Mark Current Diff)" "Create a marker for the current\
-      difference record"
+      difference region"
     set "g(tooltip,Clear Current Diff Mark)" "Clear the marker for the\
-      current difference record"
+      current difference region"
 
     # File menu...
     menu $fileMenu
@@ -3659,7 +3659,7 @@ proc build-menubar {} {
       and compute a new Diff"
     set "g(tooltip,File List)" "Recompute by choosing another file among those\
       derived from the present input parameters"
-    set "g(tooltip,Recompute Diffs)" "Recompute all difference records for the\
+    set "g(tooltip,Recompute Diffs)" "Recompute all difference regions for the\
       current file"
     set "g(tooltip,Write Report...)" "Configure and produce a file depicting\
       information about the present Diff state"
@@ -3671,6 +3671,7 @@ proc build-menubar {} {
     $editMenu add separator
     $editMenu add command -label "Find..." -underline 0 -command show-find
     $editMenu add separator
+    $editMenu add command -label "Ignore CDR" -underline 0 -command ignore-hunk
     $editMenu add command -label "Split..."   -underline 0 \
       -command {splcmb-Dialog 0}
     $editMenu add command -label "Combine..." -underline 2 \
@@ -3691,10 +3692,12 @@ proc build-menubar {} {
     set "g(tooltip,Copy)" "Copy the currently selected text to the clipboard"
     set "g(tooltip,Find...)" \
         "Pop up a dialog to search for a string within either file"
+    set "g(tooltip,Ignore CDR)" "Suppress the CDR to no longer be seen\
+                                as a Difference region"
     set "g(tooltip,Split...)" "Pop up a dialog\
                                 to Split the current diff at specified bounds"
     set "g(tooltip,Combine...)" "Pop up a dialog\
-                 to Combine the current diff record with ADJACENT neighbor(s)"
+                 to Combine the current diff region with ADJACENT neighbor(s)"
     set "g(tooltip,Edit File 1)" \
         "Launch an editor on the file on the left side of the window"
     set "g(tooltip,Edit File 2)"  \
@@ -3779,17 +3782,17 @@ proc build-menubar {} {
     set "g(tooltip,Show Inline Comparison (recursive))" "If set, display\
       inline differences based on recursive matching regions"
     set "g(tooltip,Auto Select)" "If set, automatically selects the nearest\
-       diff record while scrolling"
-    set "g(tooltip,Auto Center)" "If set, moving to another diff record will\
+       diff region while scrolling"
+    set "g(tooltip,Auto Center)" "If set, moving to another diff region will\
        center the diff on the screen"
     set "g(tooltip,Center Current Diff)" "Center the display around the\
-      current diff record"
+      current diff region"
     set "g(tooltip,First Diff)" "Go to the first difference"
     set "g(tooltip,Last Diff)" "Go to the last difference"
-    set "g(tooltip,Previous Diff)" "Go to the diff record just prior to the\
-       current diff record"
-    set "g(tooltip,Next Diff)" "Go to the diff record just after the current\
-       diff record"
+    set "g(tooltip,Previous Diff)" "Go to the diff region just prior to the\
+       current diff region"
+    set "g(tooltip,Next Diff)" "Go to the diff region just after the current\
+       diff region"
     set "g(tooltip,Ignore White Spaces)" "If set, applys whitespace options\
        during the Diff"
     set "g(tooltip,Ignore Blank Lines)" "If set, suppress empty lines from\
@@ -3906,6 +3909,8 @@ proc build-toolbar {} {
     set w(combo) $toolbar.combo
     set w(rediff_im) $toolbar.rediff_im
     set w(rediff_tx) $toolbar.rediff_tx
+    set w(ignhnk_im) $toolbar.ignhnk_im
+    set w(ignhnk_tx) $toolbar.ignhnk_tx
     set w(splitDiff_im) $toolbar.split_im
     set w(splitDiff_tx) $toolbar.split_tx
     set w(cmbinDiff_im) $toolbar.cmbin_im
@@ -3954,6 +3959,12 @@ proc build-toolbar {} {
     toolbutton $toolbar.rediff_im -image rediffImg -command recompute-diff \
       -bd 1
     toolbutton $toolbar.rediff_tx -text "Rediff" -command recompute-diff \
+      -bd 1 -pady 1
+
+    # ignhnk...
+    toolbutton $toolbar.ignhnk_im -image ignhnkImg -command ignore-hunk \
+      -bd 1
+    toolbutton $toolbar.ignhnk_tx -text "Ignore CDR" -command ignore-hunk \
       -bd 1 -pady 1
 
     # split/combine ...
@@ -4050,9 +4061,11 @@ proc build-toolbar {} {
     set_tooltips $w(find_tx) {"Pop up a dialog to search for a string within\
       either file"}
     set_tooltips $w(rediff_im) {"Recompute and redisplay the difference\
-      records"}
+      regions"}
     set_tooltips $w(rediff_tx) {"Recompute and redisplay the difference\
-      records"}
+      regions"}
+    set_tooltips $w(ignhnk_im) {"Ignore current diff region"}
+    set_tooltips $w(ignhnk_tx) {"Ignore current diff region"}
     set_tooltips $w(splitDiff_im) {"Split Diff at specified bounds"}
     set_tooltips $w(splitDiff_tx) {"Split Diff at specified bounds"}
     set_tooltips $w(cmbinDiff_im) {"Combine Diff with ADJACENT neighbor(s)"}
@@ -4097,6 +4110,7 @@ proc pack-toolbuttons {toolbar} {
     pack $toolbar.combo -side left -padx 2
     pack $toolbar.sep1 -side left -fill y -pady 2 -padx 2
     pack $toolbar.rediff_$bp -side left -padx 2
+    pack $toolbar.ignhnk_$bp -side left -padx 2
     pack $toolbar.split_$bp -side left -padx 2
     pack $toolbar.cmbin_$bp -side left -padx 2
     pack $toolbar.find_$bp -side left -padx 2
@@ -4520,7 +4534,7 @@ proc diffmark {option {diff -1}} {
                 toolbutton $widget -text "\[$diff\]" \
                          -command [list diffmark activate $diff] -bd 1 -pady 1
                 pack $widget -side left -padx 2
-                set g(tooltip,$widget) "Diff Marker: Jump to diff record\
+                set g(tooltip,$widget) "Diff Marker: Jump to diff region\
                   number $diff"
             }
             update-display
@@ -4546,7 +4560,7 @@ proc diffmark {option {diff -1}} {
             if {[winfo exists [set widget $w(toolbar).mark$option]]} {
                 $widget config -text "\[$diff\]" \
                          -command [list diffmark activate $diff] -bd 1 -pady 1
-                set g(tooltip,$widget) "Diff Marker: Jump to diff record\
+                set g(tooltip,$widget) "Diff Marker: Jump to diff region\
                   number $diff"
             }
         }
@@ -6379,7 +6393,7 @@ proc update-display {} {
     if {!$g(initOK)} {
         # disable darn near everything
 
-        foreach b [list rediff splitDiff cmbinDiff find \
+        foreach b [list rediff ignhnk splitDiff cmbinDiff find \
                    prevDiff firstDiff nextDiff lastDiff centerDiffs \
                    mergeChoice1 mergeChoice2 mergeChoice12 mergeChoice21] {
             $w(${b}_im) configure -state disabled
@@ -6468,6 +6482,7 @@ proc update-display {} {
 
         # Merge choices and hunk centering
         foreach buttonpref {im tx} {
+            $w(ignhnk_$buttonpref) configure -state normal
             $w(centerDiffs_$buttonpref) configure -state normal
             $w(mergeChoice1_$buttonpref) configure -state normal
             $w(mergeChoice2_$buttonpref) configure -state normal
@@ -6478,12 +6493,13 @@ proc update-display {} {
 
         $w(popupMenu) entryconfigure "Center*" -state normal
         $w(viewMenu) entryconfigure "Center*" -state normal
+        $w(editMenu) entryconfigure "Ignore*" -state normal
 
     } else {
         # Note: this is essentially for the "No-Diffs-found" case
         #   and effectively suggests that Layer 4 will do NOTHING!
-        foreach b [list splitDiff cmbinDiff centerDiffs markClear markSet \
-                   mergeChoice1 mergeChoice2 mergeChoice12 mergeChoice21] {
+        foreach b [list ignhnk splitDiff cmbinDiff centerDiffs markClear \
+            markSet mergeChoice1 mergeChoice2 mergeChoice12 mergeChoice21] {
             $w(${b}_im) configure -state disabled
             $w(${b}_tx) configure -state disabled
         }
@@ -6491,6 +6507,7 @@ proc update-display {} {
 
         $w(popupMenu) entryconfigure "Center*" -state disabled
         $w(viewMenu) entryconfigure "Center*" -state disabled
+        $w(editMenu) entryconfigure "Ignore*" -state disabled
         $w(editMenu) entryconfigure "Split*" -state disabled
         $w(editMenu) entryconfigure "Combine*" -state disabled
         $w(markMenu) entryconfigure "Mark*" -state disabled
@@ -6792,6 +6809,29 @@ proc chk-ancRnge {anclst S E {prev {}}} {
 }
 
 ###############################################################################
+# Interactively cause the CDR to be treated as suppressed
+###############################################################################
+proc ignore-hunk {} {
+    global  g w
+    
+    # Ensure g(pos) will remain within the eventual g(diff)
+    if {[set i $g(pos)] == [llength $g(diff)]} {incr i -1}
+
+    # Then re-categorize the current hunk
+    set hID $g(currdiff)
+    if {[mark-diffs [list $hID [string map {a A c C d D} $hID]]]} {
+        move $i 0 1
+        buttons normal
+    } else {
+        $w(combo) configure -commandstate disabled
+        $w(combo) configure -value {}
+        $w(combo) configure -commandstate normal
+        after idle {show-status "Files now APPEAR as identical"}
+        buttons disabled
+    }
+}
+
+###############################################################################
 # Mark difference regions and build up the combobox
 #   N.B> Be very AWARE of when/why g(diff) .vs. g(DIFF) is used!!!
 ###############################################################################
@@ -6860,7 +6900,9 @@ proc mark-diffs {{rmvrpl {}}} {
             # N.B> 'i' begins as an "index+1" position against g(diff) ...
             #   afterward, 'inject' refers to 1st NEW index in g(DIFF)
             set j [lsearch -exact $g(DIFF) [lindex $g(diff) $inject]];#map 1st,
-            set g(diff) [lreplace $g(diff) $inject [incr i -1] {*}$rmvrpl]
+            if {[llength $rmvrpl] !=1 || [string match {*[acd]*} {*}$rmvrpl]} {
+                set g(diff) [lreplace $g(diff) $inject [incr i -1] {*}$rmvrpl]
+            } { set g(diff) [lreplace $g(diff) $inject [incr i -1]]}
             set i [expr {$i - $inject + $j}] ;# readjust i to last mapped index
             set g(DIFF) [lreplace $g(DIFF) [set inject $j] $i {*}$rmvrpl]
         }
@@ -7075,8 +7117,11 @@ proc mark-diffs {{rmvrpl {}}} {
     # Ensure that any NEWLY CREATED diff regions are 'mark'ed in the MERGE
     # window (so they can be tagged in the next step -- note that 'rmvrpl' here
     # either HAS the list of ONLY the additions, or is EMPTY which flags the
-    # procedure to mark EVERY diff
-    if {$g(count)} {merge-add-marks $rmvrpl}
+    # procedure to mark EVERY diff (unless it was an SINGLE suppress request)
+    if {$g(count)
+    && ([llength $rmvrpl]!=1 || [string match {*[acd]*} [lindex $rmvrpl 0]])} {
+        merge-add-marks $rmvrpl
+    }
 
     # Lastly, ensure the MAP reflects the CURRENT diffs and go (re-)TAG it all
     map-draw
@@ -7862,7 +7907,11 @@ proc rediff {} {
         if {"$Statmsg" == ""} {
             # Unless something FORCED us to not perform/complete the
             # diff, this HAS to be the reason there just ARE zero hunks!
-            set Statmsg "Files are identical"
+            # BUT - dont lie - if there are SUPPRESSED hunks
+            # then it really only APPEARS this way
+            if {$g(COUNT) > $g(count)} {
+                set Statmsg "Files now APPEAR as identical"
+            } { set Statmsg "Files are identical" }
         }
         eval after idle {show-status "{$Statmsg}"}
         buttons disabled
@@ -9719,8 +9768,7 @@ proc do-usage {mode} {
     set usage {
     $g(name) may be started in any of the following forms(1-4):
         (Note that a FILESPEC is either a file, directory or a Subversion-
-         style URL; optional parameters are documented here in [brackets];
-         with <btn>GUI</btn> elements as shown here)
+         style URL; optional parameters are documented here in [brackets])
 
     (1) Interactive selection of files to compare:
         tkdiff
@@ -9754,6 +9802,7 @@ proc do-usage {mode} {
 
     set text {
 <hdr>Description</hdr>
+              (any references to <btn>GUI</btn> elements will be as shown here)
 Classically speaking, a diff is a <itl>directed</itl> comparison of two text\
       files that describes what would need to be changed to convert the first\
       such file content into the second. $g(name) thus groups its parameters\
@@ -10156,12 +10205,13 @@ proc do-help {} {
 
 The top row contains the <btn>File</btn>, <btn>Edit</btn>, <btn>View</btn>,\
       <btn>Mark</btn>, <btn>Merge</btn> and <btn>Help</btn> menus. The second\
-      row contains a toolbar which contains navigation and merge selection\
-      tools. Below that are labels which identify the contents for each of the\
-      two text windows that follow just below them. Note that these labels\
-      will <itl>also</itl> produce a tooltip popup showing the ACTUAL filename\
-      and its modification time when hoverring over it with the mouse,\
-      <itl>provided</itl> it is not a tempfile (such as extracted from an SCM).
+      row contains a toolbar having Diff management, search, navigation and\
+      merge selection tools. Below that are labels which identify the contents\
+      for each of the two text windows that follow just below them. Note that\
+      these labels will <itl>also</itl> produce a tooltip popup showing the\
+      ACTUAL filename and its modification time when hoverring over it with\
+      the mouse, <itl>provided</itl> it is not a tempfile (such as extracted\
+      from an SCM).
       In addition, if an ANCESTORFILE was specified at startup, a third label\
       (a graphic denoting a text file labelled "A") will appear between the\
       other two labels. It also will display a tooltip indicating its name,\
@@ -10199,21 +10249,21 @@ All difference regions (DRs) are <itl>usually</itl> highlighted to set them\
       the left matches the CDR on the right). And when "$pref(syncscroll)" is\
       also set, that Left and Right CDR will be horizontally aligned as well.
 
-<hdr>Changing the CDR</hdr>
+<hdr>Selecting the CDR</hdr>
 
-The CDR can be selected in a sequential manner by means of the <btn>Next</btn>\
+The CDR can be chosen in a sequential manner by means of the <btn>Next</btn>\
       and <btn>Previous</btn> buttons. The <btn>First</btn> and\
       <btn>Last</btn> buttons allow you to quickly navigate to the\
       first or last CDR, respectively. For random access to the DRs, use the\
       dropdown listbox in the toolbar or the diff map, described below.
 
 By clicking right over a window and using the popup menu you can select\
-      <btn>Find Nearest Diff</btn> to find the diff record nearest the point\
+      <btn>Find Nearest Diff</btn> to find the diff region nearest the point\
       where you clicked, or simply double-click <itl>NOT</itl> over an\
       existing DR, as a shortcut to the same result.
 
 You may also select any highlighted diff region as the current diff region by\
-      just double-clicking <bld>on</bld> it.
+      just double-clicking <bld>on</bld> it, as well.
 
 <hdr>Operations</hdr>
 
@@ -10246,13 +10296,27 @@ The <btn>New...</btn> item displays a dialog where you may choose two files\
 
 <btn>Copy</btn> copies the currently selected text to the system clipboard.\
       <btn>Find</btn> pops up a dialog to let you search either text window\
-      for a specified text string. <btn>Split...</btn> and\
-      <btn>Combine...</btn> pops up a dialog that allows you to rearrange\
-      the CONTENT of the CDR to isolate specific lines, facilitating\
-      specific merge file generation goals. <btn>Edit File 1</btn> and\
-      <btn>Edit File 2</btn> launch an editor on the files displayed in the\
-      left- and right-hand panes.  <btn>Preferences</btn> pops up a dialog\
-      box from which display (and other) options can be changed and saved.
+      for a specified text string. <btn>Ignore CDR</btn> allows you to\
+      designate the <itl>present</itl> CDR as no longer being of any concern\
+      whatsoever to $g(name). It can be used for those situations where it\
+      would be otherwise <itl>dangerous</itl> to attempt to automatically\
+      ignore the Diff region by some <bld>rule</bld> (such as implied by the\
+      <btn>Ignore RE-matched Lines</btn> mechanism of the <btn>View</btn> menu\
+      described shortly). <btn>Split...</btn> and <btn>Combine...</btn> pops\
+      up a dialog that allows you to rearrange the CONTENT of the CDR to\
+      isolate specific lines, facilitating specific merge file generation\
+      goals. It should be noted however, that these last three operations\
+      ("Split", "Combine", and "Ignore") are LOCAL to $g(name) itself; meaning\
+      that each represents work performed by you to <itl>adjust</itl> the\
+      <bld>result</bld> of the most recent Diff, generally in pursuit of some\
+      "Merge" goal. Such work is <itl>ONLY VALID</itl> until such time as a\
+      mergefile is written out (to lock the work in place) or a subsequent\
+      Diff is run <itl>by any means</itl> to effectively <bld>cancel</bld>\
+      such work! See the upcoming sub-heading <bld>Merging</bld> for further\
+      info. <btn>Edit File 1</btn> and <btn>Edit File 2</btn> launch an editor\
+      on the files displayed in the left- and right-hand panes.\
+      <btn>Preferences</btn> pops up a dialog box from which display\
+      (and other) options can be changed and saved.
 
 3. From the <btn>View</btn> menu:
 
@@ -10285,7 +10349,7 @@ This menu is organized into a few sections, the first of which deals with\
       <itl>within</itl> the Left and Right text displays themselves. You may\
       choose any combination, at any time, as suits your comprehension needs.
       The third section addresses automatic processing that can be performed\
-      as other iteractions in $g(name) take place.\
+      as other interactions in $g(name) take place.\
       If <btn>Synchronize Scrollbars</btn> is on, the Left and Right\
       text windows are synchronized i.e. scrolling one of the windows scrolls\
       the other. If <btn>Auto Center</btn> is on, jumping (by whatever means)\
@@ -10340,15 +10404,18 @@ The <btn>About $g(name)</btn> item displays copyright and author\
 
 The first tool is a dropdown list of all of the differences in a standard\
       diff-type format. You may use this list to go directly to any diff\
-      record. Further navigation tools will be described in due turn.  The\
+      region. Further navigation tools will be described in due turn.  The\
       next tool, <btn>Rediff</btn>, simply re-computes the diff of the\
       CURRENT two files from scratch as if it was a New Diff. This could be\
       appropriate if you have invoked an editor on either file since starting\
-      and now wish to see the net effects of your editting. The following two\
-      tools, <btn>Split</btn> and <btn>Combine</btn>, each provide\
-      complimentary abilities to adjust the boundaries of the CDR. The\
-      reasons for doing this are further explained in the section below on\
-      Merging.
+      and now wish to see the net effects of your editting. The next tool\
+      <btn>Ignore</btn> will cause the CDR to no longer be treated\
+      <itl>AS</itl> a DR; it is a interactive method not unlike those that\
+      perform a similar service based on command line flags to match either a\
+      empty or regular-expression matched line. The following two tools,
+      <btn>Split</btn> and <btn>Combine</btn>, each provide complimentary
+      abilities to adjust the boundaries of the CDR. The reasons for doing
+      this are further explained in the section below on Merging.
 The remaining tools on the toolbar consist of the <btn>Find</btn> tool for\
       searching the text for a given word or phrase. This is then followed\
       (in order) by groupings of tools dealing with merge choice selections,\
@@ -10366,7 +10433,7 @@ The remaining tools on the toolbar consist of the <btn>Find</btn> tool for\
       The <btn>Center</btn> button centers the CDRs in their respective text\
       windows. You can also set <btn>Auto Center</btn> in\
       <btn>Preferences</btn> (or via the <btn>View</btn> menu) to do this\
-      automatically for you as you navigate through the diff records.
+      automatically for you as you navigate through the diff regions.
 
 <hdr>Keyboard Navigation</hdr>
 
@@ -10394,25 +10461,27 @@ The cursor keys, Home, End, PageUp and PageDown work as expected, adjusting\
 To scroll the text widgets independently, make sure\
       <btn>$pref(syncscroll)</btn> in <btn>Preferences</btn> is off. If it is\
       on, scrolling either text widget scrolls the other. Scrolling does not\
-      change the current diff record (CDR), nor will it cause the Merge\
+      change the current diff region (CDR), nor will it cause the Merge\
       Window (if displayed) to scroll. A Mouse scroll-wheel is also\
       recognized for scrolling vertically, or, if the <cmp>Shift</cmp> key\
       is simultaneously pressed, horizontally, as well.
 
 <hdr>Diff Marks</hdr>
 
-You can set "markers" at specific diff regions for easier navigation. To do\
-      this, click on the <btn>Set</btn> Mark button when the desired DR is\
-      currently the CDR. It will create a new toolbar button that will jump\
-      back to this specific diff region when pressed. To clear a diff mark,\
-      first <bld>go to that diff record</bld>, then click on the\
-      <btn>Clear</btn> Mark button. Note that because <btn>Split</btn> or\
-      <btn>Combine</btn> can <itl>both</itl> manufacture or destroy SPECIFC\
-      difference regions, it can become necessary for $g(name) to "Clear" a\
-      given marker. Only those specific markers involved are affected;\
+You can set "markers", effectively "bookmarking" specific diff regions for\
+      easier navigation. To do this, click on the <btn>Set</btn> Mark button\
+      when the desired DR is currently the CDR. It will create a new toolbar\
+      button that will jump back to this specific diff region when pressed.
+      To clear a diff mark, first <bld>go to that diff region</bld>, then\
+      click on the <btn>Clear</btn> Mark button. Note that because\
+      <btn>Split</btn> or <btn>Combine</btn> can <itl>both</itl> manufacture\
+      or destroy SPECIFC difference regions, it can become necessary for\
+      $g(name) to "Clear" a given marker. The same can be said for\
+      <btn>Ignore</btn>. Only those specific markers involved are affected;\
       however, any marker carrying a label <itl>beyond</itl> any addition or\
       contraction of difference regions <bld>will</bld> always have their\
-      labels 'adjusted' accordingly to maintain their originally given region.
+      labels 'adjusted' accordingly to maintain their originally given region\
+      association.
 
 <hdr>Diff Map</hdr>
 
@@ -10488,12 +10557,12 @@ To merge the two files, go through the difference regions (via <btn>Next</btn>,\
 Oftentimes, you may find that the "Diff" program has packed several lines\
       worth of differences into a large chunk, simply because it never found a\
       <itl>common</itl> line that BOTH files could agree was the SAME in both\
-      files. Yet only a <itl>SINGLE</itl> defined difference record (a CDR)\
+      files. Yet only a <itl>SINGLE</itl> defined difference region (a CDR)\
       can have its Left or Right side chosen for merging at any one time.\
       This is the "problem" that <btn>Split</btn> or <btn>Combine</btn> are\
       intended to address. Using these tools, you will be permitted to\
       repartition the exact lines that should be treated as a distinct\
-      difference record. In each case, you start from some specific CDR,\
+      difference region. In each case, you start from some specific CDR,\
       and then either break it apart into smaller pieces ("Split") or\
       reassemble it ("Combine") at boundaries of your choice.
       A dialog window is provided to oversee the movement of the CDR boundary\
@@ -10511,19 +10580,21 @@ Oftentimes, you may find that the "Diff" program has packed several lines\
       occur, but because the highlighting will have been squeezed shut,\
       it will be difficult to determine exactly where the border is. Backing\
       off one step however, can help re-establish your present location.
-      Once accepted, $g(name) will treat the new difference record exactly\
+      Once accepted, $g(name) will treat the new difference region exactly\
       the same as any other, despite the fact that it appears run together\
-      with other adjoining records, having NO common line to separate them.\
+      with other adjoining regions, having NO common line to separate them.\
       The power of this is that two modifications, having NOTHING to do\
       with each other beyond proximity, can thus be merged (or not)\
       <itl>INDIVIDUALLY</itl> as needed. Given that many version control\
       systems prefer that only those lines pertinent to a specific logical\
       change reside in a given 'patch', these features allows the user to\
       surgically distinguish one <itl>logical</itl> change from another.
-      Note that ONLY a previously Split record, can ever be Combined, and\
-      that $g(name) will always assign each line of the original CDR into an\
-      appropriate record (creating and/or removing existing records as\
-      necessary), and automatically assigning its type (add/change/delete).
+      Note that ONLY a previously Split region, can ever be Combined,\
+      <bld>provided</bld> you do <itl>NOT</itl> choose to <btn>Ignore CDR</btn>\
+      some portion of it in the interim. Note further that $g(name) will\
+      always assign each line of the original CDR into an appropriate region\
+      (creating and/or removing existing regions as necessary), and\
+      <itl>automatically</itl> assigning its type (add/change/delete).
       If you have difficulty envisioning which edges to move to accomplish\
       a specific goal, think of the edges as defining 3 individual regions\
       per side of data: Above-the-CDR, the NEW CDR, and Below-the-CDR. Then\
@@ -10796,8 +10867,8 @@ You may toggle this setting simply to gain editting access to the\
 
 <bld>$pref(autocenter)</bld>
 
-If <bld>set</bld>, whenever a new diff record becomes the current diff record (for\
-      example, when pressing the next or previous buttons), the diff record\
+If <bld>set</bld>, whenever a new diff region becomes the current diff region (for\
+      example, when pressing the next or previous buttons), the diff region\
       will be automatically centered on the screen.
 If <bld>unset</bld>, no automatic centering will occur.
 
@@ -13839,6 +13910,13 @@ pICAgP8AAAD/AP//AAAA//8A/wD//////yH5BAEAAAEALAAAAAAUABQAQAicAAMIHEiwoMF0
 7AD0euVKl8OHrhjqAgDvnDsAGDOmG2jR3TmDIAVaxFiRoMJXKF/1ypgR5UqPIWOCTIfQnc2b
 ABpS/Bgg3cmUQIOqBHBxIUpYADYKLEqUp8ynUKMatFgy5LmrWEdOrDoQIcuvrnSWPJfQqFCg
 YhPCAtqrrduUL8/9fIWUJs2LQ2EGmFt34MWmBNPdvKlUquEAAQEAOw==
+}
+
+image create photo ignhnkImg -format gif -data {
+R0lGODlhFgAWAKIAANnZ2d0AAJ6enmJiYgAAAAC5AACWMQBQACH5BAEAAAAALAAAAAAWABYA
+AANwCLrc/jBKF8JcgtU6xSBDtlmRR2QCMZZfVhjGBj6mUrzxBoAZ9tmwXKWg4ClqAFzssHkV
+Q8gkLHAAMHHEnSD62lyDhiLqBxAOwc9ebRRQhnchhoeNTlNW5QXB2Bi1MHx9OgApH38RHA09
+F4yNjo8MCQA7
 }
 
 image create photo markSetImg -format gif -data {

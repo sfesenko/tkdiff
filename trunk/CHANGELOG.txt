@@ -9,12 +9,13 @@
      * CVS is now able to produce a list of candidate comparisons
      * ALL SCMs doing candidate detection now handle CONFLICTed files
      * URLs (Svn style) accepted as FileSpec by Dialog and Cmdline
-     - includngs usage with/without @Rev suffix and for Ancestor
+     - including usage with/without @Rev suffix and for Ancestor
      * Multiple SCMs and/or cross-branch comparison is now possible
      * Repaired 'conflict' parsing to accept diff3-style files
      * Eliminated a TK-updating race condition involving the DiffMap
+     * Interactive diff-region suppression is now possible
      * Setting a line-comparison Font preference now affects entire Window
-     * Small features: window manager graphic now provided
+     * Small features: window manager graphic for TkDiff now provided
      -    displayed filenames are relativized when possible (shorter)
      -    failed Diffs no longer considered Fatal
      -    inappropriate (identical) Ancestor cancels 3way w/notification
