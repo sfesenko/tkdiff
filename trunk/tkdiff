@@ -4445,7 +4445,7 @@ proc cfg-toolbar {{init 0}} {
     #   (spin over ALL items partly because 'winfo' doesnt offer glob-specs)
     foreach item [winfo children $tb] {
         if {[string match {*_[it][mx]} $item]
-        &&  [winfo ismapped $item]
+        && ([winfo ismapped $item] || $init)
         && ![string match "*$btn($I)" $item] } {
             # out with the old, in with the new
             grid remove $item
