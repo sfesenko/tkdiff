@@ -34,7 +34,7 @@ package require Tk 8.5
 
 # set a couple o' globals that we might need sooner than later
 set g(name)    "TkDiff"
-set g(version) "5.2"
+set g(version) "5.2.1"
 set g(debug)     0  ;# Initialized (by default) to false
 
 # get this out of the way -- we want to draw the whole user interface
@@ -266,7 +266,7 @@ array set ASYNc {
 #   Only those elements that are gauranteed to exist are initialized here.
 #   The remainder of the FINFO entries are dynamically added and (occasionally
 #   removed) as the user interacts with the tool. There are 3 categories of
-#   information:
+#   dynamic information:
 #      #1. entries that describe INPUT parameters:
 #           f,*       filespec that describe files/dirs/URLs to be acted upon
 #           rev,*     revision value (for a to-be-detected SCM system)
@@ -309,6 +309,11 @@ array set ASYNc {
 #   "fCurpair" designates which monotonic PAIR is actively in use (1->fPairs)
 #   with "fPairs" itself being the COUNT of how many "fCurpair"s exist.
 #
+#   "fLfmt" notes the CURRENT format of presenting a multiFile List where
+#   (0=menu, 1=dialog); It is used in conjunction with opts(fLMmax) to
+#   determine WHEN that format needs to be SWITCHed to one form or the other
+#   Intention is to avoid 'unweildy' menus with too many entries.
+#
 #   Thus "f,1" DIRECTLY implying "pth,1" is true ONLY if "f,1" designates a
 #   single file. Likewise for "f,2" -> "pth,2". Input fields designating
 #   directories and/or SCM branches (or commits) can generate SEVERAL "pth,N"
@@ -332,6 +337,7 @@ array set ASYNc {
 #   Be VERY CAUTIOUS when considering CHANGING ANY of these manipulations!
 array set finfo {
     title        {}
+    fLfmt        0
     fPairs       0
     fCurpair     1
     fRecurs      0
@@ -509,6 +515,7 @@ foreach {key val desc} [subst {
     fancyButtons  $opts(fancyButtons)           {Windows-style toolbar buttons}
     filetypes     { {"Text Files" {*.txt *.tcl}} {"All Files" {*}} }
                                      {Choice of file suffixes for file dialogs}
+    fLMmax            9                           {FileList Menu max-threshold}
     fRecurs       "-r -q"              {Options for Diff recursive File search}
     geometry      "80x30"                                    {Text window size}
     genEdit       "<e>"                  {Invoke an editor on the Current file}
@@ -608,8 +615,8 @@ catch {tk scaling [expr {100.0 / 72}]}
 # Our Dialog 'factory' supporting: creation/display/invocation/release
 #   Specific actions/args are per each subcmd & existence of 'windowName' (wNM) 
 ############ subcmds ##############
-# NONMODAL
-# MODAL wNM ?toplevel-args?
+# NONMODAL wNM ?toplevel-args?
+# MODAL    wNM ?toplevel-args?
 #               Create/restores Dialog window toplevel; RCode indicates which.
 #               1= wNM existed and will be reused; 0= wNM was JUST NOW created:
 #                 caller then DEFINEs content (if reqd), followed by any needed
@@ -2551,7 +2558,7 @@ proc assemble-args {} {
 }
 
 ###############################################################################
-# Align window label decorations to the CURRENT input file pairing
+# Align various label decorations to the CURRENT input file pairing
 ###############################################################################
 proc alignDecor {pairnum} {
     global g w finfo
@@ -2628,11 +2635,14 @@ proc inquire-diff {} {
     # Ask Diff which files DIFFER in the given directories (recursively)
     lappend cmd {*}$opts(diffcmd) {*}$opts(fRecurs)
     if {$opts(ignoreblanks)} {lappend cmd {*}$opts(ignoreblanksopt) }
+    set xtractFNre \
+        "^diff(?: +\[^ ]*){[expr [llength $cmd] - 1]} +(.+?)(.*) (.+?)\\2\$"
     lappend cmd $finfo(f,1) $finfo(f,2)
 
     show-status "Executing {$cmd}"
     lassign [run-command $cmd] dOUT dERR dRC
-    set g(returnValue) $dRC ;# Record REAL RC
+    # DO NOT RECORD $dRC as g(returnValue) in this context !!
+    #   It would be inappropriate as the EXIT code
 
     if {$dRC < 0 || $dRC > 1 || $dERR != ""} {
         set MSG "Diff FAILED (rc=$dRC):\n$dERR"
@@ -2642,26 +2652,36 @@ proc inquire-diff {} {
   
     # Parses output using a "RegExp 'recognizer'" to accomodate OTHER engines
     # which would produce (most likely) distinctly different syntactic forms
+    #   N.B> DO NOT simplify this into a "switch -regexp"... (TCL bug!)
+    #   Somehow "switch" would PREVENT the $xtractFNre RE from matching
     foreach line [split $dOUT "\n"] {
-        switch -regexp -matchvar fpath -- $line {
-        {^Files (.+) and (.+) differ$} {
-        # GNU Diff output syntax: WITH '-q' option:
+        switch -glob -- $line {
+        {Files *} {
+        # GNU Diff -r output syntax (of ALL files): WITH '-q' option:
+            set fpath [regexp -inline -- {^Files (.+) and (.+) differ$} $line]
+
             set finfo(lbl,[incr cnt]) [shortNm [set finfo(pth,$cnt) \
                                                             [lindex $fpath 1]]]
             set finfo(lbl,[incr cnt]) [shortNm [set finfo(pth,$cnt) \
                                                             [lindex $fpath 2]]]
             }
-        {^diff(?: -[^ -]*)+(?: --)? (/?[^/]*)/(.*)(?: (?=[^/]*/))(/?[^/]*)/\2$} {
-        # GNU Diff output syntax: WITHOUT '-q' option:
-            #   Yes, that 'RE' is a monster: it is designed for a $line like:
-            #       diff  ?-any ...?  dir1/path   dir2/path
-            #   Swallowing any/all option flag(s), while CONSTRAINING the TWO
-            #   captured filenames to be identical EXCEPT for their LEADING
-            #   dirnames - notwithstanding ANY and ALL possible BLANKS - Phew!
+        {diff *} {
+        # GNU Diff -r output syntax (of NON-BINARY files): WITHOUT '-q' option:
+        #   (data parrots the ORIGINAL $cmd except w/ SPECIFIC filenames)
+        # N.B> side-benefit: Encountered BINARY files will NOT be picked-up
+        #   because Diff CHANGES their wording (to one we DONT look for!)
+        #   Thus suppress POSSIBLE "failure" report (based off the Diff Rcode)
+            if {$MSG!={}} {set MSG {}} 
+
+            # N.B> Stripping out the filenames here requires a Regexp that KNOWS
+            #   how many OTHER options were present on the command GENERATING
+            #   the output lines being parsed now - (see earlier for its defn)
+            set fpath [regexp -inline -- $xtractFNre $line]
+
             set finfo(lbl,[incr cnt]) [shortNm [set finfo(pth,$cnt) \
-                                          [lindex $fpath 1]/[lindex $fpath 2]]]
+                                          [lindex $fpath 1][lindex $fpath 2]]]
             set finfo(lbl,[incr cnt]) [shortNm [set finfo(pth,$cnt) \
-                                          [lindex $fpath 3]/[lindex $fpath 2]]]
+                                          [lindex $fpath 3][lindex $fpath 2]]]
             }
         default { continue }
         }
@@ -3105,6 +3125,7 @@ proc create-display {} {
     set w(srch)     .srch
     set w(prefs)    .pref
     set w(scDialog) .scDialog
+    set w(mFdiag)   .mFdiag
 
     # now, simply build all the REQUIRED pieces
     build-toolbar
@@ -3268,32 +3289,206 @@ proc show-popupMenu {x y} {
 }
 
 ###############################################################################
-# Load a different file pair of a multi-file diff
+# Manipulates the list of filepairs of a multi-file diff
+#   (functions even when only ONE pair exists - although its mostly pointless)
 ###############################################################################
-proc multiFileMenu {command index} {
-    global w opts finfo
-    Dbg "multiFileMenu ($command $index) -> $finfo(fCurpair)"
+proc multiFile {command args} {
+    global g w opts finfo
 
-    if {$finfo(fPairs) <= 1} {return}
+    # Special 'global' - is logically PRIVATE to this routine
+    # N.B> needed because we CANT tie the 'radiobutton' widgets DIRECTLY into
+    #   finfo(fCurpair), or we LOSE the KNOWLEDGE if a PRIOR value existed
+    #   (due to the widget SETTING its attached VAR BEFORE invoking its CMD)!
+    # Think of this as allowing the cmd to VALIDATE it wasn't chosen TWICE.
+    global mFactivE
 
-    set OK 1
+    # Convenience internal names
+    set cvs $w(mFdiag).cv
+    set vsb $w(mFdiag).sb
+
+    # Default operation is to NOT invoke a Diff (unless determined otherwise)
+    set diffit 0
     switch -- $command {
         prev {
+            # choose previous file
             if {$finfo(fCurpair) > 1} {
-                incr finfo(fCurpair) -1
-            } else {set OK 0}
+                set diffit [incr finfo(fCurpair) -1]
+            }
         }
         next {
+            # choose next file
             if {$finfo(fCurpair) < $finfo(fPairs)} {
-                incr finfo(fCurpair)
-            } else {set OK 0}
+                set diffit [incr finfo(fCurpair)]
+            }
         }
-        jump {
-            set finfo(fCurpair) $index
+        jump { lassign $args index
+            # choose designated file (but disallow RE-selection)
+            if {$finfo(fCurpair) != $index} {
+                set diffit [set finfo(fCurpair) $index]
+            }
+        }
+        mrkACK { lassign $args index
+            # Mark file listing as SUCCESSFULLY accessed
+            if {$finfo(fPairs) <= $opts(fLMmax)} {
+                # Remember menuslots (0-3) have "dialog/prev/next/separ"
+                $w(multiFileMenu) entryconf [expr {$index + 3}]    \
+                                          -activebackg {PaleGreen}
+            } { $w(mFlist).b$index config -activebackg {PaleGreen} }
+            set mFactivE $index
+        }
+        mrkNAK { lassign $args index
+            # Mark file listing as UN-SUCCESSFULLY accessed
+            if {$finfo(fPairs) <= $opts(fLMmax)} {
+                # Remember menuslots (0-3) have "dialog/prev/next/separ"
+                $w(multiFileMenu) entryconf [expr {$index + 3}] \
+                                          -activebackg {Tomato}
+            } { $w(mFlist).b$index config -activebackg {Tomato} }
+            set mFactivE $index
+        }
+        empty { lassign $args which
+            # Destroy given CATEGORY of entries (if they happen to exist)
+            #   (presupposes menu ALWAYS has 'dialog, prev, next' as first 3)
+            #   (and YES - it DOES remove the trailing menu separator !!)
+            if {$which != "list" && [$w(multiFileMenu) index end] > 2} {
+                $w(multiFileMenu) delete 3 end
+            }
+            if {$which != "menu" &&[winfo exists $w(mFdiag)]} {
+                foreach wdg [winfo children $w(mFlist)] { destroy $wdg }
+            }
+        }
+        reload {
+            # Empty old entries out first, from either category (if any) ...
+            # Reloading DESIRED category thereafter
+            multiFile empty "both"
+            multiFile load $finfo(fPairs)
+        }
+        adjsz { lassign $args cnt
+            # Establish dialog filelist HEIGHT (to know what can scroll)
+            # N.B> invoke as "after idle" so implied 'update' will have run
+            set rgn [list 0 0 [winfo    width  $w(mFlist)] \
+                       [set i [winfo reqheight $w(mFlist)]]]
+            $cvs configure -scrollregion $rgn -yscrollincr [expr $i / $cnt] \
+                            -height [expr ($i/$cnt) * [min $cnt 5]]
+            # (?? above 'height' works initially EXACTLY as desired - unclear
+            #     why it then STOPS (again as desired) after user manually
+            #     chooses to resize window (maybe a 'geometry' override?) ??)
+        }
+        load { lassign $args cnt
+            # Append entries that exist NOW (caller told us how many that is)
+            # into the TARGETTED location (menu or window) based on threshold
+            # N.B> global 'mFactivE' stands-in for (fCurpair) see earlier note
+            set i 0
+            while {[incr i] <= $cnt} {
+                if {$cnt <= $opts(fLMmax)} {
+                    if {$i==1} { $w(multiFileMenu) add separator }
+                    $w(multiFileMenu) add radiobutton -variable mFactivE  \
+                         -value $i -label $finfo(lbl,[expr {$i * 2 - 1}]) \
+                         -command [list multiFile jump $i]
+                } { grid [radiobutton $w(mFlist).b$i  -variable mFactivE  \
+                         -value $i -text  $finfo(lbl,[expr {$i * 2 - 1}]) \
+                         -command [list multiFile jump $i]] -sticky "w"
+                }
+            }
+
+            # If content went INTO the list, schedule FINDING its extent...
+            # Otherwise its in the menu - Update the Pullright menu LABEL.
+            # Regardless, initiating Diff for this case: CALLERS responsibility
+            if {$cnt > $opts(fLMmax)} {
+                grid $cvs
+                after idle multiFile adjsz $cnt
+                $w(multiFileMenu) entryconf 0 -label "Choose File..."
+                set finfo(fLfmt) 1
+            } elseif {[winfo exists $w(mFdiag)]} {
+                $w(multiFileMenu) entryconf 0 -label "Reconfig Threshold..."
+                set finfo(fLfmt) 0
+            }
+        }
+        threshld { lassign $args thresh
+            # New opts(fLMmax) was set, but verify if it "makes a difference"
+            if {($finfo(fLfmt)==0 && $finfo(fPairs) <= $thresh)
+            ||  ($finfo(fLfmt)==1 && $finfo(fPairs) >  $thresh)} { return }
+
+            # Populate EXISTING data into the desired target location, but
+            # TRANSFER any present STATUS information along with it
+            multiFile load [set cnt $finfo(fPairs)]
+            set i 0
+            while {[incr i] <= $cnt} {
+                if {$cnt > $opts(fLMmax)} { set mrkACKNAK \
+                    [$w(multiFileMenu) entrycget [expr $i+3] -activebackg]
+                } { set mrkACKNAK [$w(mFlist).b$i    cget    -activebackg] }
+                if {$mrkACKNAK in {Tomato PaleGreen}} {
+                    if {$cnt > $opts(fLMmax)} {
+                        $w(mFlist).b$i       config -activebackg $mrkACKNAK
+                    } { $w(multiFileMenu) entryconf [expr $i+3]  \
+                                                    -activebackg $mrkACKNAK }
+                }
+            }
+            if {$cnt > $opts(fLMmax)} {
+                multiFile empty menu ; set finfo(fLfmt) 1
+            } { multiFile empty list ; set finfo(fLfmt) 0 }
+        }
+        set { lassign $args Sfrac Efrac
+            # WATCH for making the scrollbar itself VISIBLE, by MONITORING
+            # the scrolling feedback values from the canvas-to-scrollbar
+            $vsb set $Sfrac $Efrac
+            #   (should REALLY only toggle when it makes a difference...but)
+            if {$Sfrac>0.0 || $Efrac<1.0} { grid $vsb } { grid remove $vsb }
+        }
+        dialog {
+            # Reconfig and/or Choose from present list of available multiFiles
+            if {![Dialog NONMODAL $w(mFdiag)]} {
+                wm title $w(mFdiag) "$g(name) FileList"
+                wm transient $w(mFdiag) .
+                wm   group   $w(mFdiag) .
+
+                # We don't want the window to be deleted, just hidden from view
+                wm protocol $w(mFdiag) WM_DELETE_WINDOW \
+                                                    {Dialog dismiss $w(mFdiag)}
+
+                # Threshold control area is always present
+                #   ('scale' wdg is allowed to stretch horiz as needed)
+                set ctl [frame $w(mFdiag).ctl -bd 1 -relief solid]
+                label $ctl.lbl -text "Prefer menu\nat/below:"
+                scale  $ctl.menulim -orient horizontal -from 1 -to 25\
+                        -var opts(fLMmax) -tick 0 -command {multiFile threshld}
+                button $ctl.dismiss -text "Dismiss" \
+                                            -command "Dialog dismiss $w(mFdiag)"
+                grid $ctl.lbl $ctl.menulim $ctl.dismiss -sticky ew
+                grid columnconfig $ctl 1 -weight 1
+
+                # Now construct a scrollable frame (for widgets of filenames)
+                #      (simply a frame logically INSIDE a canvas)
+                #   N.B> DO NOT supply any dimensions to the INNER frame!!
+                # But create and connect a vert scrollbar for that canvas
+                canvas $cvs -height [expr [winfo reqheight $ctl] *3]  -bd 0 \
+                                -yscrollcom {multiFile set} -highlightthick 0
+                scrollbar $vsb -orient vertical -command "$cvs yview" -bd 0 \
+                                                            -highlightthick 0
+
+                # Put the widget-fillable innerframe (mFlist) WITHIN the canvas
+                $cvs create window 0 0 -anchor nw -window \
+                                          [set w(mFlist) [frame $cvs.fl -bd 0]]
+
+                # Put it all together - CTL goes in 1st row but spans 2 cols
+                # while CVS + VSB make up second row,
+                grid $ctl -columnspan 2 -sticky ew
+                grid $cvs $vsb   -row 1 -sticky nsew
+                grid columnconfig $w(mFdiag) 0 -weight 1
+                grid rowconfig    $w(mFdiag) 1 -weight 1
+
+                # Remove the list (initially)... loading content restores it
+                # ...but THAT will depend on filecount and Threshold setting
+                grid remove $cvs $vsb
+            }
+            # Config
+            set mFactive $finfo(fCurpair)
+            # Display it.
+            Dialog show $w(mFdiag)
         }
     }
 
-    if {$OK} { do-diff ; update-display }
+    # Certain subcmds (chg of CURRENT file) require Diff to be run
+    if {$diffit} { do-diff ; update-display }
 }
 
 ###############################################################################
@@ -4046,11 +4241,13 @@ proc build-menus {} {
                            "Select new input parameters and compute a new Diff"}
       $fM casc "File List" {5 $mFM
        "Choose a different file pair from those derived from the present input"}
-        $mFM comm "Previous File" {0 {multiFileMenu prev 0} genPvfile
+        $mFM comm "Reconfig Threshold..." {0 {multiFile dialog} {}
+                          "Adjust where filelist is displayed (menu or dialog)"}
+        $mFM comm "Previous File" {0 {multiFile prev} genPvfile
                                                 "Choose the previous file pair"}
-        $mFM comm "Next File" {1 {multiFileMenu next 0} genNxfile
+        $mFM comm "Next File" {1 {multiFile next} genNxfile
                                                     "Choose the next file pair"}
-        $mFM separator {} {}
+      $fM separator {} {}
       $fM comm "Recompute Diffs" {0 {reCalcD user}  genRecalc
                         "Recompute all difference regions for the current file"}
       $fM separator {} {}
@@ -4178,9 +4375,6 @@ proc build-menus {} {
     # And this just simply ISN'T a user-modifiable binding (perhaps should be?)
     $pM entryconfigure "Find Near*" -accelerator "Dbl-Click"
 
-    # Populate the multiFileMenu with the OTHER file pairs-in-waiting
-    reload-multifile $finfo(fPairs)
-
     # Establish the binding to provide menuItem Tooltips
     foreach m "$fM $eM $vM $mM $gM $hM" {
         bind $m <<MenuSelect>> {showTooltip menu %W}
@@ -4196,27 +4390,6 @@ proc build-menus {} {
     if {[info procs Dbg-UI] != {}} {
         $w(menubar) add command    -label "Dbg-UI"     -underline 0       \
             -command {if {[winfo exists .dbgUI]} {destroy .dbgUI} {Dbg-UI}}
-    }
-}
-
-###############################################################################
-# Enter names of file pairs accessible for diffing into the menu
-###############################################################################
-proc reload-multifile {pairs} {
-    global w finfo
-
-    # Empty old entries out first (if any) ...
-    #   (presupposes it ALWAYS has 'prev, next, separator' as first 3 entries)
-    if {[$w(multiFileMenu) index end] > 2} {
-        $w(multiFileMenu) delete 3 end
-    }
-
-    # then append entries that exist NOW (caller tells us how many that is)
-    set i 0
-    while {[incr i] <= $pairs} {
-        $w(multiFileMenu) add radiobutton -value $i -variable finfo(fCurpair) \
-            -label $finfo(lbl,[expr {$i * 2 - 1}]) \
-            -command [list multiFileMenu jump $i]
     }
 }
 
@@ -4770,8 +4943,8 @@ proc setBinds {args} {
             bind $btag $opts(navLast)      { move last }
             bind $btag $opts(genEdit)      { do-edit %X %Y}
             bind $btag $opts(genFind)      { srch-text }
-            bind $btag $opts(genNxfile)    { multiFileMenu next 0 }
-            bind $btag $opts(genPvfile)    { multiFileMenu prev 0 }
+            bind $btag $opts(genNxfile)    { multiFile next }
+            bind $btag $opts(genPvfile)    { multiFile prev }
             bind $btag $opts(genXit)       { do-exit }
             bind $btag $opts(genRecalc)    { reCalcD user }
             bind $btag $opts(mrgLeft)      { do-merge-choice 1  }
@@ -5287,8 +5460,8 @@ proc customize {} {
         set row 0
         set col 0
         foreach key { toolbarIcons fancyButtons - showln tagln - showcbs tagcbs
-                      - showmap colorcbs - tagtext showinline1 x showinline2 -
-                      showlineview x } {
+                      - showmap colorcbs - tagtext showinline1 x showinline2
+                      showlineview x x fLMmax } {
             if {$key != "x"} {
                 if {$key == "-"} {
                     frame $frame.f${row} -bd 0 -height 4
@@ -5297,8 +5470,15 @@ proc customize {} {
                     set col 1 ;# forces NEXT column to zero and increments row
                 } else {
                     set tmpopts($key) $opts($key)
-                    checkbutton $frame.c${row}${col} -indicatoron 1 -onval 1  \
-                          -offval 0 -text "$pref($key)" -variable tmpopts($key)
+                    if {$key=="fLMmax"} {
+                        scale $frame.c${row}${col} -orient horizontal -tick 0 \
+                                -from 1 -to 25 -var tmpopts($key)             \
+                                -label $pref($key)                  -length 2i
+                        # N.B> '-length' mitigates stupid label truncation!
+                    } {
+                        checkbutton $frame.c${row}${col} -indicatoron 1       \
+                                    -text "$pref($key)" -variable tmpopts($key)
+                    }
 
                      # Manage each widget EXCEPT 'fancybuttons' on MacOS 'Aqua'
                     if {$key != "fancyButtons" || $w(wSys) != "aqua"} {
@@ -8154,8 +8334,7 @@ proc rediff {} {
     # Provide feedback on this filepair being successfully accessed (or not)...
     # Decorate all the visuals per this set of files...and then finally push
     # g(lnumDigits) AND is3way to reconfig width of Info widgets (do-show-Info)
-    $w(multiFileMenu) entryconf [expr {$pairnum + 2}] \
-        -activebackg [expr {"$msg" != {}  ? {Tomato} : {PaleGreen}}]
+    if {$msg=={}} { multiFile mrkACK $pairnum } { multiFile mrkNAK $pairnum }
     alignDecor $pairnum
     do-show-Info
 
@@ -8813,9 +8992,9 @@ proc check-error {result output} {
 }
 
 ###############################################################################
-# redo the current diff (optionally forcing a semantic [eg. preference] reason)
+# Recalc the current diff (optionally FORCING) the semantic [preference] reason
 # Attempt to return to the same diff region, numerically speaking.
-# Force a recompute because of a changed interpretative semantic
+#   (used to force a redo when a changed semantic could AFFECT the Diff result)
 ###############################################################################
 proc reCalcD {reason {onoff {}}} {
     global g opts finfo
@@ -8873,8 +9052,8 @@ proc do-new-diff {} {
 
     set g(disableSyncing) 1 ;# turn off syncing until things settle down
 
-    # make new args available then do the diff
-    reload-multifile $finfo(fPairs)
+    # make new file args available then do the diff
+    multiFile reload
     do-diff
 
     move first 1 1
@@ -8996,6 +9175,9 @@ proc main {} {
         }
         cfg-toolbar ;# which MAY have tried to set w(selcolor)
     }
+
+    # Populate the multiFile list with the OTHER file pairs-in-waiting
+    multiFile reload
 
     # Finally DRAIN anything still pending in the eventloop
     update
@@ -9588,7 +9770,7 @@ proc newDiffBrowse {type widget {title {}}} {
         } else {set initfil {}}
 
     } else { set initdir [pwd]; set initfil {} }
-    Dbg "initdir($initdir) initfil($initfil)"
+    Dbg "NewDbrowse: initdir($initdir) initfil($initfil)"
 
     # What KIND of entry are we browsing to find ?
     switch -glob $type {
@@ -10782,8 +10964,8 @@ In the second form(2), either or both <cmp>FILESPEC</cmp>s may be to a local\
       if said directories should be searched <itl>recursively</itl> or not.\
       Pressing it will activate it (or not) with highlighting for feedback.\
       Note that if the equivalent command line option (<bld>-R</bld>) was\
-      already given, the button can appear as <itl>already activated</itl>.\
-      One last point - if the button appears as <bld>disabled</bld> (regardless\
+      already given, the button will appear being <itl>already activated</itl>.\
+      One last point - if the button displays as <bld>disabled</bld> (regardless\
       of showing as <itl>activated</itl>) it will not function, and is simply\
       reminding you that the needed preference setting\
       ("<itl>$pref(fRecurs)</itl>") has not yet been established. See the\
@@ -11231,30 +11413,52 @@ The <btn>New...</btn> item displays a dialog where you may choose two files\
       advised that this is the same dialog as may appear when $g(name) is\
       started with no command line parameters given, and its described\
       behavior there is the same as invoking it from this context (see the\
-      help topic "On Command Line" for specific details). Next, the\
-      <btn>File List</btn> item will only be active when the current $g(name)\
-      command parameters yeilds more than a single pairing of files to compare;\
-      pressing it produces a submenu list of the other available comparisons.\
-      Choosing one re-initializes the display to the file pair thus selected.\
+      help topic "On Command Line" for specific details).
+      Next, the <btn>File List</btn> item will only be active when the current\
+      $g(name) command parameters yeilds more than a single pairing of files\
+      to compare; pressing it produces a submenu that gives access to the list\
+      of the other available comparisons. Depending on how lengthy that list\
+      might be, it may be shown <bld>directly</bld> in the menu itself, up to\
+      an <itl>adjustable</itl> maximum of 25 names. When that is the case,\
+      choosing one re-initializes the display by performing a Diff to the file\
+      pair thus selected. The names themselves are only the "Left"-side files,\
+      but they represent <itl>both</itl> of the paired files being compared.\
       Note that <itl>after</itl> choosing an item, the background of that item\
       will henceforth be red or green when the mouse hovers over that item,\
       based on whether that pairing was successfully read into $g(name). When\
       no color is shown, that item has NOT yet been accessed.\
-      <btn>File List</btn> items <itl>may</itl> require noticeable time to load\
+      List items <itl>may</itl> require noticeable time to load\
       if the files each represents requires network access to be processed;\
-      however, once loaded, subsequent reloading is entirely a local task. The\
-      <btn>Recompute Diffs</btn> item recomputes the differences between the\
-      two files whose names appear above each of the two text display windows.\
-      The <btn>Write Report...</btn> item lets you create various text report\
-      files that can contain information content of your choosing from the text\
-      windows(s). In addition, simply visiting the dialog to compose your\
-      report will provided detailed statistics on the breadth and complexity of\
-      the differences between the current file pair, which will automatically\
-      be included in any such report created. You may, of course, choose to\
-      not produce <itl>ANY</itl> report, and simply view the statistics.\
-      For more information about the reports themselves, see the section\
-      "Report Generation" presented later. Lastly, the <btn>Exit</btn> item\
-      terminates $g(name).
+      however, once loaded, subsequent reloading is entirely a local task.
+      When the submenu does <bld>NOT</bld> display the files, the FIRST entry\
+      of the menu will read "<btn>Choose File...</btn>" which, in turn, causes\
+      a popup window to be displayed containing the list. The operation of the\
+      list is the same regardless of which (menu or popup) is in use. Remaining\
+      items on the submenu simply select either the <btn>Previous File</btn> or\
+      <btn>Next File</btn> relative to whatever file was current. However,\
+      there is an additional control on the popup that permits you to\
+      <itl>adjust</itl> the threshold value that $g(name) should use in\
+      determining which form of the list to provide. As this threshold is also\
+      a user preference ("$pref(fLMmax)"), more details are available in the\
+      help category "On Preferences", including recommended uses.
+      For the case where files <itl>ARE</itl> shown in the submenu, the\
+      <btn>Choose File...</btn> item becomes renamed to\
+      <btn>Reconfig Threshold...</btn> allowing you to switch to using the popup\
+      list at your discretion. Note that because the list presentation depends\
+      on the <bld>current</bld> number of files, performing a <btn>New...</btn>\
+      Diff, may fall above or below your <itl>present</itl> threshold.
+      The <btn>Recompute Diffs</btn> item recomputes the differences between\
+      the two files whose names appear above each of the two text display\
+      windows. The <btn>Write Report...</btn> item lets you create various text\
+      report files that can contain information content of your choosing from\
+      the text windows(s). In addition, simply visiting the dialog to compose\
+      your report will provided detailed statistics on the breadth and\
+      complexity of the differences between the current file pair, which will\
+      automatically be included in any such report created. You may, of course,\
+      choose to not produce <itl>ANY</itl> report, and simply view the\
+      statistics. For more information about the reports themselves, see the\
+      section "Report Generation" presented later. Lastly, the <btn>Exit</btn>\
+      item terminates $g(name).
 
 2. From the <btn>Edit</btn> menu:
 
@@ -11818,10 +12022,9 @@ Preferences are preserved in a file in your home directory (identified by the\
       <cmp>HOME</cmp> is not set the platform-specific variant\
       of "/" will be used. If you are on a Windows platform the file will be\
       named <cmp>_tkdiff.rc</cmp> and will have the attribute "hidden". For\
-      all other platforms the file will be named\
-      "<cmp>.tkdiffrc</cmp>". You may override the name and location of this\
-      file by setting the environment variable <cmp>TKDIFFRC</cmp> to\
-      whatever filename you wish.
+      all other platforms the file will be named "<cmp>.tkdiffrc</cmp>".\
+      You may override the name and location of this file by setting the\
+      environment variable <cmp>TKDIFFRC</cmp> to whatever filename you wish.
 
 You may view, edit, locally apply and even save preferences (to the file just\
       described above) from a provided dialog accessible via the\
@@ -11884,10 +12087,37 @@ If the \"<itl>$pref(ignoreblanksopt)</itl>\" (described soon) is specified\
 Arguments to send with the Diff command causing it to search a given pair of\
       directory <bld>trees</bld> recursively to locate all pairs of resultant\
       files that contain differences. Each pair will be expected to be named\
-      identically as the search proceeds, except for each starting directory.
+      identically as the search proceeds, except for the starting directories.
       The decision to USE these arguments originates from either the command\
       line (or the interactive dialog) and will only be effective when\
       <bld>both</bld> given inputs <itl>ARE</itl> directories.
+      The default value provided (<bld>-r</bld> and <bld>-q</bld>) are both\
+      reasonable, but not necessarily ideal. First they <itl>presume</itl> the\
+      use of a GNU-like Diff Engine (to be understood to mean) "recursive" and\
+      "quiet" respectively. But the use of the "quiet" option implies how and\
+      what is eventually reported by the search. Using it, <itl>ALL</itl> like\
+      named files are reported, <itl>even when they do not appear to be Text\
+      files</itl>. This means your resulting file list can contain files that\
+      are KNOWN to be different, despite not being files that can be readily\
+      compared, or visually read, let alone reviewed, merged, etc.. Leaving\
+      the "quiet" option OUT, effectively results in <itl>suppressing</itl>\
+      any files that are considered (by the GNU Diff Engine, at least) to be\
+      <bld>binary</bld> (eg. non-text) from being returned as candidates.
+      This may be a better result, although possibly still not quite perfect.\
+      There are instances, of seemingly "Text-like" files, for which $g(name)\
+      might still be inappropriate. A Cscope database, for one, comes to mind.\
+      Thus you may wish to <bld>add</bld> yet <itl>more</itl> options here\
+      (such as the Gnu Diff <bld>-x</bld> or <bld>-X</bld> options) that tell\
+      the Engine to <bld>ignore</bld> specified filename patterns when\
+      searching for file pairs.
+      You should review the documentation for your configured Engine to\
+      determine if other available options might assist in "getting the desired\
+      results". $g(name) does not, itself, look at ANY of these option flags\
+      and simply sends them to the Engine when requesting a "recursive" search.\
+      HOWEVER - because the handling of the results <itl>returned</itl> by the\
+      Engine drives what then happens, it <bld>is possible</bld> that YOUR\
+      chosen Engine might not "report back" its results in a syntax\
+      intelligible to $g(name). If such is the case, contact us for assistance.
 
 <bld>$pref(ignoreblanksopt)</bld>
 
@@ -12258,6 +12488,20 @@ If <bld>set</bld>, display the window near the bottom of the display that\
       the differences, and/or perhaps a different foreground color.
 If <bld>unset</bld>, the window will not be shown.
 
+<bld>$pref(fLMmax)</bld>
+
+This setting controls how $g(name) presents the list of potential file pairs\
+      when more than a single pair was derived from the input parameters. As\
+      the label on the control suggests, file counts <itl>less-than (or equal\
+      to)</itl> the value selected will be made available via the menu\
+      directly. Conversely, if the file count is <itl>greater</itl>, a popup\
+      window will be used. The primary reason for this choice is that a menu\
+      can become unweildy when it contains more than a handful of items.
+      In addition, some users may prefer the ability to <itl>see</itl> the\
+      filelist at all times, via the popup window, which may be accomplished\
+      by setting the threshold to its minimum value. $g(name) defaults this\
+      value to 9 initially, but only permits a fixed maximum of 25.
+      
 <hdr>Behavior</hdr>
 
 It is said that people who spend large blocks of time using any given tool\
