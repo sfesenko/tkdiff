@@ -3359,7 +3359,11 @@ proc multiFile {command args} {
         reload {
             # Empty old entries out first, from either category (if any) ...
             # Reloading DESIRED category thereafter
+            #   N.B> 'reload' is an EXTERNAL request - must ensure dialog
+            #   exists in case we are ABOUT to populate it!
             multiFile empty "both"
+            if {![winfo exists $w(mFdiag)]
+            && $finfo(fPairs) > $opts(fLMmax)} { multiFile dialog 0 }
             multiFile load $finfo(fPairs)
         }
         adjsz { lassign $args cnt
@@ -3434,7 +3438,7 @@ proc multiFile {command args} {
             #   (should REALLY only toggle when it makes a difference...but)
             if {$Sfrac>0.0 || $Efrac<1.0} { grid $vsb } { grid remove $vsb }
         }
-        dialog {
+        dialog { lassign $args showit
             # Reconfig and/or Choose from present list of available multiFiles
             if {![Dialog NONMODAL $w(mFdiag)]} {
                 wm title $w(mFdiag) "$g(name) FileList"
@@ -3481,9 +3485,9 @@ proc multiFile {command args} {
                 grid remove $cvs $vsb
             }
             # Config
-            set mFactive $finfo(fCurpair)
-            # Display it.
-            Dialog show $w(mFdiag)
+            set mFactivE $finfo(fCurpair)
+            # Display it (if request was from the User).
+            if {$showit} { Dialog show $w(mFdiag) }
         }
     }
 
@@ -4241,7 +4245,7 @@ proc build-menus {} {
                            "Select new input parameters and compute a new Diff"}
       $fM casc "File List" {5 $mFM
        "Choose a different file pair from those derived from the present input"}
-        $mFM comm "Reconfig Threshold..." {0 {multiFile dialog} {}
+        $mFM comm "Reconfig Threshold..." {0 {multiFile dialog 1} {}
                           "Adjust where filelist is displayed (menu or dialog)"}
         $mFM comm "Previous File" {0 {multiFile prev} genPvfile
                                                 "Choose the previous file pair"}
