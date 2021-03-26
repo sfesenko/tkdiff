@@ -4376,7 +4376,7 @@ proc build-menus {} {
     $pM entryconfigure "Find Near*" -accelerator "Dbl-Click"
 
     # Establish the binding to provide menuItem Tooltips
-    foreach m "$fM $eM $vM $mM $gM $hM" {
+    foreach m "$fM $mFM $eM $vM $mM $gM $hM" {
         bind $m <<MenuSelect>> {showTooltip menu %W}
     }
 
