@@ -3328,6 +3328,7 @@ proc multiFile {command args} {
             }
         }
         mrkACK { lassign $args index
+            multiFile threshld $opts(fLMmax)
             # Mark file listing as SUCCESSFULLY accessed
             if {$finfo(fPairs) <= $opts(fLMmax)} {
                 # Remember menuslots (0-3) have "dialog/prev/next/separ"
@@ -3337,6 +3338,7 @@ proc multiFile {command args} {
             set mFactivE $index
         }
         mrkNAK { lassign $args index
+            multiFile threshld $opts(fLMmax)
             # Mark file listing as UN-SUCCESSFULLY accessed
             if {$finfo(fPairs) <= $opts(fLMmax)} {
                 # Remember menuslots (0-3) have "dialog/prev/next/separ"
@@ -3359,11 +3361,7 @@ proc multiFile {command args} {
         reload {
             # Empty old entries out first, from either category (if any) ...
             # Reloading DESIRED category thereafter
-            #   N.B> 'reload' is an EXTERNAL request - must ensure dialog
-            #   exists in case we are ABOUT to populate it!
             multiFile empty "both"
-            if {![winfo exists $w(mFdiag)]
-            && $finfo(fPairs) > $opts(fLMmax)} { multiFile dialog 0 }
             multiFile load $finfo(fPairs)
         }
         adjsz { lassign $args cnt
@@ -3378,11 +3376,16 @@ proc multiFile {command args} {
             #     chooses to resize window (maybe a 'geometry' override?) ??)
         }
         load { lassign $args cnt
+            #   N.B> Cant 'load' what isn't THERE - ensure dialog EXISTs
+            #   in case we are ABOUT to populate it!
+            if {![winfo exists $w(mFdiag)]
+            && $cnt > $opts(fLMmax)} { multiFile dialog 0 }
+
             # Append entries that exist NOW (caller told us how many that is)
             # into the TARGETTED location (menu or window) based on threshold
-            # N.B> global 'mFactivE' stands-in for (fCurpair) see earlier note
             set i 0
             while {[incr i] <= $cnt} {
+                # N.B> see earlier note on global 'mFactivE' vs (fCurpair)
                 if {$cnt <= $opts(fLMmax)} {
                     if {$i==1} { $w(multiFileMenu) add separator }
                     $w(multiFileMenu) add radiobutton -variable mFactivE  \
