@@ -1696,7 +1696,7 @@ proc get-file-rev {fn ndx {rev ""} {Scm {}} {probe 0}} {
     set stillbad 0
 
     # Ensure 'fn' does NOT name an UNKNOWN USER via a tilde-expansion!
-    if {[catch "file exists $fn" tildechk]} {
+    if {[catch {file exists $fn} tildechk]} {
         set MSG $tildechk ; set stillbad 1
     }
 
@@ -1911,7 +1911,7 @@ proc get-file {fn ndx {probe 0}} {
 
     set MSG {}
     # Is Crashable from a ~XXX/yyy name if XXX is NOT a real userid
-    if {[catch "file exists $fn" tildechk]} {
+    if {[catch {file exists $fn} tildechk]} {
         set MSG "$tildechk"
     } elseif {!$tildechk} {
         # DO NOT REPORT non-existence if this attempt is ONLY a probe
@@ -6243,6 +6243,7 @@ proc prefapply {{WdG {}}} {
     do-show-Info
     do-show-map
     do-show-lineview
+    multiFile threshld $opts(fLMmax)
     ###########################################################################
     ### OK - thats it for getting preferences in place  -  - -
     ######
