@@ -3375,6 +3375,14 @@ proc multiFile {command args} {
             #     why it then STOPS (again as desired) after user manually
             #     chooses to resize window (maybe a 'geometry' override?) ??)
         }
+        scroll {lassign $args mvby
+            # ONLY DO the requested scroll...
+            #   IF  threshold indicates we ARE using the list right now
+            #   AND scrollbar is ACTIVE (ie. there IS more to see)
+            if {$finfo(fPairs) > $opts(fLMmax) && [winfo ismapped $vsb]} {
+                $cvs yview scroll $mvby units
+            }
+        }
         load { lassign $args cnt
             #   N.B> Cant 'load' what isn't THERE - ensure dialog EXISTs
             #   in case we are ABOUT to populate it!
@@ -3485,7 +3493,17 @@ proc multiFile {command args} {
 
                 # Remove the list (initially)... loading content restores it
                 # ...but THAT will depend on filecount and Threshold setting
+                # and lastly tell canvas to scroll (+/- Y-only) on Wheel events
                 grid remove $cvs $vsb
+                if {$w(wSys) == "x11"} {
+                    bind $cvs <Button-4> {multiFile scroll -1} ;# Up
+                    bind $cvs <Button-5> {multiFile scroll  1} ;# Dwn
+                } elseif {$w(wSys) == "aqua"} {
+                    bind $cvs <Option-MouseWheel> \
+                        {multiFile scroll [expr {%D>=0 ? -5:5}]} ;# Big Up/Dwn
+                }
+                bind $cvs <MouseWheel> \
+                        {multiFile scroll [expr {%D>=0 ? -1:1}]} ;# Up/Dwn
             }
             # Config
             set mFactivE $finfo(fCurpair)
