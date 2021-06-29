@@ -660,7 +660,10 @@ proc Dialog {cmd wNM args} {
             lassign {1 0}  M(MODAL) M(NONMODAL)
             set w(mode$wNM) [expr {$M($cmd) * 2}] ;# To do syntax check @'show'
             if {![winfo exists $wNM]} {
-                wm withdraw [toplevel $wNM {*}$args]
+                # N.B> The overall tool class DERIVES from its scriptname
+                # (w/a Capitalized 1st letter): MAINTAIN that for any FURTHER
+                # windows created else the Wmgr MAY decorate its taskbar wrong
+                wm withdraw [toplevel $wNM -class Tkdiff {*}$args]
                 if {$w(wSys)=="aqua"} { setAquaDialogStyle $wNM $M($cmd) }
                 if {[info exists w(dlgeo,$wNM)]} {
                     # We were TOLD (at a prior 'dismiss') to REposition this
