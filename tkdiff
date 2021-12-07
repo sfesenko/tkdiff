@@ -1774,7 +1774,7 @@ proc get-file-rev {fn ndx {rev ""} {Scm {}} {probe 0}} {
         append cmd "p4" $cmdsfx
         if {[set lbl $rev]==""} {set lbl "HEAD"} {set rev "#$rev"}
         set finfo(${A}lbl,$ndx) "[shortNm $fn] ($Scm $lbl)"
-        set finfo(${A}tmp,$ndx) "$cmd print -q \"${p4file}$rev\""
+        set finfo(${A}tmp,$ndx) "$cmd print -q \"${fn}$rev\""
         }
     Accurev {
         append cmd "accurev" $cmdsfx
@@ -6040,8 +6040,9 @@ proc prefapply {{WdG {}}} {
     }
 
     # tabstops require a little extra work. We need to figure out the width of
-    # an "m" in the widget's font, then multiply that by the tab stop width.
-    set cwidth [font measure [$w(LeftText) cget -font] "m"]
+    # an "avg char" in the widget's font, multiplying by the tab stop "count".
+    # We tried using an "m", but "0" appears to work better.
+    set cwidth [font measure [$w(LeftText) cget -font] "0"]
     set tabstops [expr {$cwidth * $tmpopts(tabstops)}]
     $w(LeftText)   configure -tabs $tabstops
     $w(RightText)  configure -tabs $tabstops
@@ -6844,8 +6845,8 @@ proc build-merge {} {
         $w(mergeText) tag configure {currtag} {*}$opts(currtag)
         $w(mergeText) tag raise sel ;# Keep this on top
 
-        # adjust the tabstops
-        set cwidth [font measure [$w(mergeText) cget -font] "m"]
+        # adjust the tabstops (see similar code in prefapply WHY we use "0")
+        set cwidth [font measure [$w(mergeText) cget -font] "0"]
         set tabstops [expr {$cwidth * $opts(tabstops)}]
         $w(mergeText) configure -tabs $tabstops
 
@@ -9178,7 +9179,7 @@ proc main {} {
         while {[set rcod [assemble-args]] < 2} {
             # REMOVING this clause provides NewDiff as a FAILED-cmdline retry)
             if {$rcod > 0 && ![winfo exists .newDiff]} {
-                            fatal-error "Insufficeint usable input"}
+                            fatal-error "Insufficient usable input"}
             if {![newDiff]} {do-exit}
         }
     } else {do-exit}
