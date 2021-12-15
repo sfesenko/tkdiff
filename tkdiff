@@ -95,9 +95,10 @@ if {[catch {tk windowingsystem} w(wSys)]} {
     }
 }
 
-# Determine the name of the temporary directory,
-# and the name of the rc file, both of which are platform dependent.
-# This WILL likely be overridden by a preference in .tkdiffrc,
+# Determine the name of the temporary directory, the rc file name,
+# and possible VPATH EnvVar, all of which are platform dependent.
+#
+# Much MAY likely be overridden by a preference in .tkdiffrc,
 # EXCEPT (obviously) when no such file actually exists yet
 switch -- $::tcl_platform(platform) {
 windows {
@@ -306,6 +307,7 @@ array set ASYNc {
 #   Items in category #3 (NOT set here) use a DISJOINT monotonic numbering
 #   system from 1 to "fPairs" (explained next) AND a 'a'-prefix naming
 #
+#   Beyond the 'category' entries are:
 #   "fCurpair" designates which monotonic PAIR is actively in use (1->fPairs)
 #   with "fPairs" itself being the COUNT of how many "fCurpair"s exist.
 #
@@ -358,7 +360,7 @@ array set finfo {
     scm2         ""
 }
 
-# IMPORTANT:
+# CRITICAL:
 #   Color makes a HUGE difference to Tkdiff - lack of it, well, is gonna be
 #   REALLY BAD with MANY features virtually UN-USABLE ... BUT it COULD "run".
 #
@@ -1835,10 +1837,10 @@ proc get-file-rev {fn ndx {rev ""} {Scm {}} {probe 0}} {
         set msg "Did your preferred SCM system ($Scm) block file:\n"
         append msg "    $fn\nfrom its intended SCM repository?"
         }
-    default {if {!$probe} {
+    default {if {$probe} { set stillbad 1 } {
                 # ... but DONT FLAG non-existence, if it was NOT required...
                 set msg "File '$fn' is not part of a revision control system"
-            } { set stillbad 1 }
+            }
         }
     }} else {set msg "$Scm does not accept URL-based File specifications"}
 
@@ -1849,12 +1851,11 @@ proc get-file-rev {fn ndx {rev ""} {Scm {}} {probe 0}} {
 
     # If NO errs (and in 1st pairing) NOW is the time to actually GET the file
     # (even that of an ancestorfile if its required)
-    if {![string length "$MSG$msg"]} {
-        if {[string length $finfo(${A}tmp,$ndx)] && $ndx < ("$A"=="" ? 3:2)} {
-            watch-cursor "Accessing $finfo(${A}lbl,$ndx)"
-            set MSG [scm-chkget ${A}$ndx]
-            restore-cursor
-        }
+    if {![string length "$MSG$msg"] && !$stillbad && $ndx < ("$A"=="" ? 3:2)
+    && [string length $finfo(${A}tmp,$ndx)]} {
+        watch-cursor "Accessing $finfo(${A}lbl,$ndx)"
+        set MSG [scm-chkget ${A}$ndx]
+        restore-cursor
     }
 
     # Report any errors (THIS GETS slightly INVOLVED):
@@ -2357,9 +2358,9 @@ proc assemble-args {} {
                 foreach P [glob -nocomplain -directory $f(1) -types f *] {
                     set f(2) "[file join $f(1) [file tail $P]]"
                     # N.B> Uses names IN Sandbox to PROBE the SCM
-                    if {[get-file-rev "$f(2)" $cnt+1 "$r(1)"] {} 1} {
+                    if {[get-file-rev "$f(2)" $cnt+1 "$r(1)" {} 1]} {
                         array unset finfo "\[ptl]*,[expr $cnt+1]" ; set Err 1
-                    } elseif {[get-file "$f(2)" $cnt+2] 1} {
+                    } elseif {[get-file "$f(2)" $cnt+2 1]} {
                         array unset finfo "\[ptl]*,[expr $cnt+1]" ; set Err 1
                         array unset finfo "\[ptl]*,[expr $cnt+2]"
                     } else {incr cnt 2}
@@ -2371,6 +2372,7 @@ proc assemble-args {} {
                     array unset finfo "\[ptl]*,\[12]" ; set Err 1
                 } else {incr cnt 2}
             }
+
         } elseif {$revs == 2 && $pths == 1} {
             #################################################################
             #  tkdiff -rREV1 -rREV2 FILESPEC    (file in, dir at) SCM sandbox
@@ -2473,9 +2475,9 @@ proc assemble-args {} {
             } elseif {[file isdirectory $f([set i 1])] ||
                       [file isdirectory $f([set i 2])]} {
                 set P "[file join $f($i) [file tail $f($O($i))]]"
-                if {[get-file-rev "$P" $cnt+1] "$r($i)"]} {
+                if {[get-file-rev "$P" $cnt+1 "$r($i)"]} {
                     array unset finfo "\[ptl]*,[expr $cnt+1]" ; set Err 1
-                } elseif {[get-file-rev "$f($O($i))" [expr $cnt+2] "$r($O($i))"]} {
+                } elseif {[get-file-rev "$f($O($i))" $cnt+2 "$r($O($i))"]} {
                     array unset finfo "\[ptl]*,[expr $cnt+1]" ; set Err 1
                     array unset finfo "\[ptl]*,[expr $cnt+2]"
                 } else { incr cnt 2 }
@@ -5231,7 +5233,7 @@ proc bkmark {cmd args} {
 # "combobox" (which MAY do a GLOBAL grab) in whichever category is then active.
 ###############################################################################
 proc customize {} {
-    global g w pref opts tmpopts tcl_platform
+    global g w pref opts tmpopts
 
     if {![Dialog NONMODAL $w(prefs)]} {
         wm title $w(prefs) "$g(name) Preferences"
