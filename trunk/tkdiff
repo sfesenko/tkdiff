@@ -34,7 +34,7 @@ package require Tk 8.5
 
 # set a couple o' globals that we might need sooner than later
 set g(name)    "TkDiff"
-set g(version) "5.2.1"
+set g(version) "5.3"
 set g(debug)     0  ;# Initialized (by default) to false
 
 # get this out of the way -- we want to draw the whole user interface
@@ -99,7 +99,7 @@ if {[catch {tk windowingsystem} w(wSys)]} {
 # and possible VPATH EnvVar, all of which are platform dependent.
 #
 # Much MAY likely be overridden by a preference in .tkdiffrc,
-# EXCEPT (obviously) when no such file actually exists yet
+#   EXCEPT (obviously) when no such file actually exists yet
 switch -- $::tcl_platform(platform) {
 windows {
         if {[info exists ::env(TEMP)]} {
@@ -110,6 +110,12 @@ windows {
         } else {
             set opts(tmpdir) C:/temp
         }
+
+        # Split up and store a VPATH if it exists
+        if {[info exists ::env(VPATH)]} {
+            set finfo(Vpath) [split $::env(VPATH) ";"]
+        }
+
         set basercfile "_tkdiff.rc"
         # Native look for toolbar
         set opts(fancyButtons) 1
@@ -122,6 +128,11 @@ default {
         if {[info exists ::env(TMPDIR)] && $w(wSys) != "aqua"} {
             set opts(tmpdir) $::env(TMPDIR)
         }  {set opts(tmpdir) /tmp }
+
+        # Split up and store a VPATH if it exists
+        if {[info exists ::env(VPATH)]} {
+            set finfo(Vpath) [split $::env(VPATH) ":"]
+        }
 
         set basercfile ".tkdiffrc"
         # Native look for toolbar
@@ -229,7 +240,7 @@ array set g {
     returnValue     0
     scmDOsrch       0
     scmPrefer       ""
-    scmS            {SVN SCCS RCS PVCS Perforce HG GIT CVS ClearCase BK Accurev}
+    scmS            {Vpath SVN SCCS RCS PVCS Perforce HG GIT CVS ClearCase BK Accurev}
     scmSrch         {CVS GIT SVN}
     showmerge       0
     statusCurrent   "Standby...."
@@ -325,6 +336,9 @@ array set ASYNc {
 #   label values (set from whatever the ACTIVE pair of "lbl,*" entries are),
 #   and are tied directly to the GUI, (providing a cheap update mechanism), and
 #   "fRecurs" authorizes recursive descent if the Fspecs are BOTH directories.
+#
+#   Finally, "Vpath" only EXISTS (as a list of Vnodes) if the EnvVar VPATH did,
+#   with "Vpofst" noting how many nodes(0->N) were "TOP pruned" due to the CWD
 #
 #   IMPORTANT:
 #   Certain COMBINATIONS of category 2/3 entries (existance, emptiness) are used
@@ -1652,6 +1666,7 @@ proc scm-detect {fn {extra {}}} {
     if {[info exists ::env(ACCUREV_BIN)]}            { lappend scms Accurev }
     if {[info exists ::env(CLEARCASE_ROOT)]}         { lappend scms ClearCase }
     if {[is-repo-dir ".hg" $dnam]}                   { lappend scms HG }
+    if {[is-vpath $dnam]}                            { lappend scms Vpath }
 
     # We occasionally need to ADD a 'pseudo SCM' to the end of a NONEMPTY list
     if {$extra != "" && [llength $scms]} {lappend scms $extra}
@@ -1833,6 +1848,35 @@ proc get-file-rev {fn ndx {rev ""} {Scm {}} {probe 0}} {
         set finfo(${A}lbl,$ndx) "[shortNm $fn] ($Scm $lbl)"
         set finfo(${A}tmp,$ndx) "$cmd cat $rev \"$fn\""
         }
+    Vpath {
+        # Has no 'access' cmd: files simply EXIST (or not) in stacked dirs
+        # An odd 'ndx' value will be the DEEPER (aka 'older') filename;
+        # the even one: most recent. Labeling describes WHERE its found
+        if {$ndx & 1} {
+            lassign { 1  Prior  } skip lbl
+        } { lassign { 0 Topmost } skip lbl }
+
+        #   N.B> finfo(Vpath) was ALREADY top-pruned (by PWD) if needed
+        set vp $finfo(Vpofst) ;# Report Vpath depth as per original VPATH
+        foreach vNod $finfo(Vpath) {
+            if {[incr vp] && [file exists $vNod/$fn]} {
+                if {$skip} { incr skip -1
+                } { set finfo(${A}lbl,$ndx) "[shortNm $fn] (${Scm}(#$vp)-$lbl)"
+                    set finfo(${A}tmp,$ndx) "" ;# Make it THINK its a tmpfile
+                    set finfo(${A}pth,$ndx) [file join $vNod $fn]
+                    break
+                }
+            }
+        }
+
+        if {![info exists finfo(${A}pth,$ndx)]} {
+            # Error report depends on whether this was a PROBED request,
+            # yet we must STILL pass back a failed-RC if probe is active
+            if {$probe} { set stillbad 1 } {
+                set msg "$lbl Vpath entry for $fn does not exist"
+            }
+        }
+        }
     None {
         set msg "Did your preferred SCM system ($Scm) block file:\n"
         append msg "    $fn\nfrom its intended SCM repository?"
@@ -1885,6 +1929,23 @@ proc is-git-repository {} {
     return [expr [catch {eval "exec git rev-parse --is-inside-work-tree"} err] == 0]
 }
 
+# Returns =0 if arg is not prefixed by ANY of the VPATH list elements of finfo(Vpath)
+# otherwise returns which element (1->N) matched (note: this is +1 of its index value)
+proc is-vpath {dnam} {
+    global  finfo
+    # When finfo(Vpath) was never loaded, answer is NO
+    if {[info exists finfo(Vpath)]} {
+        # But we also need to know if the directory of the targeted filename
+        # is fully WITHIN at least ONE of the elements of that VPATH. 
+        #   N.B> VPATHs are expected to be ABS-paths, so normalize input first
+        set dnam [file normalize $dnam]
+        foreach vp $finfo(Vpath) {
+            if {[incr ndx] && [string equal -length [string length $vp] $vp $dnam]} { return $ndx }
+        }
+    }
+    return 0
+}
+
 proc sccs-is-bk {} {
     set cmd [auto_execok "bk"]
     set result 0
@@ -1918,8 +1979,33 @@ proc get-file {fn ndx {probe 0}} {
     if {[catch {file exists $fn} tildechk]} {
         set MSG "$tildechk"
     } elseif {!$tildechk} {
-        # DO NOT REPORT non-existence if this attempt is ONLY a probe
-        if {!$probe} { set MSG "File '$fn' does not exist" } { return 1 }
+        # DO NOT REPORT non-existence if this attempt was ONLY a probe
+        #
+        # HOWEVER -
+        #   VPATHing produces an odd dilemma: a "relative" file might still
+        #   exist, just NOT in the CWD (which equates to the TOP Vnode).
+        #   But this is 'get-file' which EXPECTS accessible filenames ONLY:
+        #       There is no point in diverting to 'get-file-rev' if 'Vpath'
+        #   cant or wont get chosen as the SCM...  SO -
+        #       First check that a Vpath exists (the easier check), then
+        #       verify that 'SCM voting' WILL yeild "Vpath"; only THEN can we
+        #       allow 'get-file-rev' to TRY for the needed file "revision".
+        if {[is-vpath $fn]
+        &&  ([set Vote [lindex $g(scmPrefer)      \
+                    [set Scm [expr {!($ndx & 1)}]]]] == "Vpath" || $Vote == "Auto")
+        &&  "Vpath" == [scm-elect [scm-detect $fn \
+                    [expr {"None" in $finfo(scm[incr Scm])?  "None" : ""}]] $Vote]} {
+            # OK - Definitely a Vpath situation, let it TRY to find the file
+            #   N.B> might STILL fail if needed version does not exist, but
+            #   this can STILL be a probe situation - so it SHOULD report failure
+            if {[get-file-rev $fn $ndx "" Vpath $probe]} {
+                # Yet we may need to ELEVATE the report (msg->MSG) to see it
+                # because get-file-rev treats nonexistance as a MINOR error
+                if {!$probe && "$MSG" == ""} {set MSG $msg}
+            }
+
+        # Otherwise allow 'probe' to control if we complain or not
+        } elseif {$probe} { return 1 } { set MSG "File '$fn' does not exist" }
     } elseif {[file isfile $fn]} {
         set finfo(${A}lbl,$ndx) [shortNm [set finfo(${A}pth,$ndx) "$fn"]]
     } else { set MSG "'$fn' exists, but is not a file" }
@@ -9128,7 +9214,7 @@ proc hunk-ndx { id {lst diff}} {
 # Get things going...
 ###############################################################################
 proc main {} {
-    global g w opts ASYNc startupError errorInfo tk_version
+    global g w opts finfo ASYNc startupError errorInfo tk_version
 
     wm protocol . WM_DELETE_WINDOW do-exit
     wm title . "$g(name) $g(version)"
@@ -9165,6 +9251,16 @@ proc main {} {
         }
     }
     if {$w(wSys) == "aqua"} { get_aqua_params }
+
+# Ordinarily the CWD points at/under the TOPMOST Vpath node (when they exist)
+# But *IFF* CWD points to a deeper Vnode, use it to TOP-prune the lead elements
+#   (allows user to review "versions" earlier than the most recent two without
+#    having to explicitly edit the VPATH EnvVar itself)
+if {[info exists finfo(Vpath)]} {
+    if {[set finfo(Vpofst) -1] && [incr finfo(Vpofst) [is-vpath "."]]} {
+        set finfo(Vpath) [lrange $finfo(Vpath) end-$finfo(Vpofst) end]
+    }
+}
 
 #   Begin by interpolating command args
 #
@@ -10884,7 +10980,7 @@ proc do-usage {mode} {
 
     (4) Source control:
             (any of: AccuRev, BitKeeper, ClearCase, CVS, Git, Mercurial,
-      Perforce, PVCS, RCS, SCCS, Subversion)
+      Perforce, PVCS, RCS, SCCS, Subversion, Vpath)
 
         tkdiff  -rREV1 [-rREV2]  FILESPEC1 [FILESPEC2]
         tkdiff [-rREV1 [-rREV2]]            (Search: CVS, Git or Subversion)
@@ -11025,22 +11121,25 @@ The fourth form(4) is conditional on $g(name) being able to detect a viable SCM\
       factor (as to accessing the interactive dialog or not) is controlled by\
       the preference setting '<itl>$pref(autoSrch)</itl>', more fully\
       described in the "On Preferences" Help page.
+      Remember that besides the explicit specification of <cmp>REV</cmp>\
+      arguments, $g(name) interprets a LACK of TWO <cmp>Fspec</cmp> as an\
+      <itl>implicit</itl> request for additional assistance from an SCM.
 
 <hdr>Source Code Management</hdr>
 In all the SCM forms, $g(name) will detect which SCM system(s) are possible.\
       This detection supports RCS, CVS and SCCS by looking for a directory\
       with the same name, although RCS can also be detected via its ",v" file\
       naming suffix convention. It detects and supports PVCS by looking for a\
-      vcs.cfg file. It detects and supports AccuRev, Perforce and ClearCase\
-      by looking for the environment variables named ACCUREV_BIN, P4CLIENT,\
-      and CLEARCASE_ROOT respectively. It detects Git by looking for a .git\
-      directory, but will only work when started from within a Git work-tree.\
-      Similarly, Subversion looks for a .svn directory, except when using\
-      URLs, expecting any <cmp>FILESPEC</cmp> to reside within a recognized\
-      "<bld>W</bld>orking <bld>C</bld>opy" (WC). Mercurial is supported by\
-      looking for a directory named ".hg" in the <cmp>FILESPEC</cmp> directory\
-      or any of its ancestor directories, which is also how .git and .svn\
-      are searched.
+      vcs.cfg file. It detects and supports AccuRev, Perforce, ClearCase and\
+      Vpath by looking for the environment variables named ACCUREV_BIN,\
+      P4CLIENT, CLEARCASE_ROOT and VPATH respectively. It detects Git by\
+      looking for a .git directory, but will only work when started from within\
+      a Git work-tree. Similarly, Subversion looks for a .svn directory, except\
+      when using URLs, expecting any <cmp>FILESPEC</cmp> to reside within a\
+      recognized "<bld>W</bld>orking <bld>C</bld>opy" (WC). Mercurial is\
+      supported by looking for a directory named ".hg" in the\
+      <cmp>FILESPEC</cmp> directory or any of its ancestor directories, which\
+      is also how .git and .svn are searched.
       It is important to recognize that several detections are based on the\
       provided FILESPEC(s), or alternately the "<bld>C</bld>urrent\
       <bld>W</bld>orking <bld>D</bld>irectory" (CWD) where $g(name) was\
@@ -11089,6 +11188,25 @@ Because there are potentially two <cmp>FILESPEC</cmp>s there can also be two\
       fabricate a merged file as a hybrid of the two versions. $g(name) can\
       address BOTH simultaneously, thus allowing the hybrid to be constructed.
 
+<hdr>Special SCM circumstances</hdr>
+While most SCM systems are generally some form of database with some method of\
+      designating unique "revision" identifiers, one, "Vpath", is really nothing\
+      more than a structured set of directories whose names are given as a list\
+      within their similarly named environment variable (VPATH). As such, its\
+      revisions are <itl>implied</itl> by the linear position each directory\
+      occupys. Each such directory in the list represents an <bld>earlier</bld>\
+      revision of whatever files it contains, thus when $g(name) needs an\
+      additional 'version' of some <cmp>Fspec</cmp> to create a pairing, it\
+      searches down the list finding the first-matched filename as the needed\
+      "predecessor" file. Some people like to think of this as a 3-dimensional\
+      filesystem, but its most important properties is that the topmost\
+      directory (where $g(name) must be invoked) is what other SCMs would\
+      consider its Sandbox, and EACH directory need only have the files that\
+      are unique (ie. changed). Thus each directory represents a "changeset"\
+      across all the files it specifies collectively. This particular form of\
+      <cmp>REV</cmp>s are simply inherent in the "Vpath" implementation, and\
+      are <itl>never</itl> actually specifed as arguments.
+
 Additionally, some SCM systems provide abilities that can identify which of\
       their files are <itl>different</itl> given <itl>only</itl> some set of\
       desired revisions (including defaulted). $g(name), using its capacity\
@@ -11120,6 +11238,37 @@ Additionally, some SCM systems provide abilities that can identify which of\
       $g(name) will accept it as such, even when it is one of multiple files\
       being provided, and automatically switch into "conflict" or even "3-Way"\
       mode when later processing that particular entry, as needed.
+
+One last point about SCM systems - as described earlier, it should be apparent\
+      that owing to the many varied ways any one system <itl>might</itl> be\
+      detected, $g(name) needs to try ALL of them, albeit in some unseen order.\
+      Because $g(name) has existed for decades, often longer than many of the\
+      SCM systems themselves, that <bld>ORDER</bld> is more a case of historical\
+      randomness we mustn't change (to preserve existing usage), than of a\
+      well-reasoned rational choice.
+      As delivered, $g(name) defaults the preference\
+      "<itl>$pref(scmPrefer)</itl>" to the value "Auto Auto", which <itl>will\
+      choose</itl> the <bld>first</bld> such SCM to sucessfully be detected for\
+      each of the two respective Text windows. You may need to tune one or\
+      both settings to the SCM you <itl>Prefer</itl> per each window if more\
+      than one system is detectable in the environment you run within, and the\
+      one you want, doesn't happen to come out as "first".\
+      For the record, this internal precedence ORDER is presently:
+      CVS
+      SVN
+      GIT
+      BK
+      SCCS
+      RCS
+      PVCS
+      Perforce
+      Accurev
+      Clearcase
+      HG
+      Vpath
+with only <itl>detected</itl> systems participating. This admittedly arbitrary\
+      looking order MAY have had a reason when each was added to $g(name), but\
+      if so, the explanation was never noted, and is thus lost to history.
 
 <hdr>A quick word about quoting</hdr>
 Most command environments, a Unix/Linux Shell for example, offer multiple\
