@@ -1,3 +1,12 @@
+5.3		(12/24/2021):
+     * Added VPATH handling, integrated to appear as yet another SCM system.
+     * Tkt#83 - repaired a (V5.2) syntax fault of Directory-based filename generation
+     * Silenced new recurrence of "TCL-sensitive" characters faulting within input filenames
+     * Filelist dialog now immediately responds fully to a threshold change
+     * Added missing Wheel scrolling to filelist dialog
+     * Ensure "Class" of secondary window(s) REMAIN designated as "Tkdiff"; not "Toplevel"
+     * Tkt#82 - usage of the Perforce SCM was crashing (wrong var reference)
+
 5.2.1		(03/27/2021):
      * New user preference affects how multiple-files are presented to the user.
        Choice of menu display has been capped at a variable maximum of 1-25. Now
