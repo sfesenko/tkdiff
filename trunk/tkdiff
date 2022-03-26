@@ -34,7 +34,7 @@ package require Tk 8.5
 
 # set a couple o' globals that we might need sooner than later
 set g(name)    "TkDiff"
-set g(version) "5.3"
+set g(version) "5.3.1"
 set g(debug)     0  ;# Initialized (by default) to false
 
 # get this out of the way -- we want to draw the whole user interface
@@ -1850,20 +1850,22 @@ proc get-file-rev {fn ndx {rev ""} {Scm {}} {probe 0}} {
         }
     Vpath {
         # Has no 'access' cmd: files simply EXIST (or not) in stacked dirs
-        # An odd 'ndx' value will be the DEEPER (aka 'older') filename;
-        # the even one: most recent. Labeling describes WHERE its found
-        if {$ndx & 1} {
-            lassign { 1  Prior  } skip lbl
-        } { lassign { 0 Topmost } skip lbl }
+        # The supplied 'rev' value says which GENERATION of the file to get:
+        # ZERO is topmost (and the default), ONE is PRIOR-to topmost
+        if {"$rev"!={} && $rev} { set lbl "Prior" } {
+            set lbl Topmost
+            set rev 0
+        }
 
-        #   N.B> finfo(Vpath) was ALREADY top-pruned (by PWD) if needed
+        #   N.B> finfo(Vpath) was ALREADY top-pruned (by CWD) as needed
         set vp $finfo(Vpofst) ;# Report Vpath depth as per original VPATH
         foreach vNod $finfo(Vpath) {
             if {[incr vp] && [file exists $vNod/$fn]} {
-                if {$skip} { incr skip -1
+                if {$rev} { incr rev -1
                 } { set finfo(${A}lbl,$ndx) "[shortNm $fn] (${Scm}(#$vp)-$lbl)"
-                    set finfo(${A}tmp,$ndx) "" ;# Make it THINK its a tmpfile
                     set finfo(${A}pth,$ndx) [file join $vNod $fn]
+                    # Make it THINK its a tmpfile if its DOWN the Vpath
+                    if {$vp > 1} { set finfo(${A}tmp,$ndx) "" }
                     break
                 }
             }
@@ -1895,7 +1897,10 @@ proc get-file-rev {fn ndx {rev ""} {Scm {}} {probe 0}} {
 
     # If NO errs (and in 1st pairing) NOW is the time to actually GET the file
     # (even that of an ancestorfile if its required)
+    #   N.B> Oddball reason NOT to is if its a Vpath'd file IN the TOP node...
+    #       which means its just THERE (and edittable - NO finfo(tmp,*) !!       
     if {![string length "$MSG$msg"] && !$stillbad && $ndx < ("$A"=="" ? 3:2)
+    && [info exists finfo(${A}tmp,$ndx)]
     && [string length $finfo(${A}tmp,$ndx)]} {
         watch-cursor "Accessing $finfo(${A}lbl,$ndx)"
         set MSG [scm-chkget ${A}$ndx]
@@ -1940,7 +1945,8 @@ proc is-vpath {dnam} {
         #   N.B> VPATHs are expected to be ABS-paths, so normalize input first
         set dnam [file normalize $dnam]
         foreach vp $finfo(Vpath) {
-            if {[incr ndx] && [string equal -length [string length $vp] $vp $dnam]} { return $ndx }
+            if {[incr ndx]
+            && [string equal -length [string length $vp] $vp $dnam]} { return $ndx }
         }
     }
     return 0
@@ -1980,32 +1986,7 @@ proc get-file {fn ndx {probe 0}} {
         set MSG "$tildechk"
     } elseif {!$tildechk} {
         # DO NOT REPORT non-existence if this attempt was ONLY a probe
-        #
-        # HOWEVER -
-        #   VPATHing produces an odd dilemma: a "relative" file might still
-        #   exist, just NOT in the CWD (which equates to the TOP Vnode).
-        #   But this is 'get-file' which EXPECTS accessible filenames ONLY:
-        #       There is no point in diverting to 'get-file-rev' if 'Vpath'
-        #   cant or wont get chosen as the SCM...  SO -
-        #       First check that a Vpath exists (the easier check), then
-        #       verify that 'SCM voting' WILL yeild "Vpath"; only THEN can we
-        #       allow 'get-file-rev' to TRY for the needed file "revision".
-        if {[is-vpath $fn]
-        &&  ([set Vote [lindex $g(scmPrefer)      \
-                    [set Scm [expr {!($ndx & 1)}]]]] == "Vpath" || $Vote == "Auto")
-        &&  "Vpath" == [scm-elect [scm-detect $fn \
-                    [expr {"None" in $finfo(scm[incr Scm])?  "None" : ""}]] $Vote]} {
-            # OK - Definitely a Vpath situation, let it TRY to find the file
-            #   N.B> might STILL fail if needed version does not exist, but
-            #   this can STILL be a probe situation - so it SHOULD report failure
-            if {[get-file-rev $fn $ndx "" Vpath $probe]} {
-                # Yet we may need to ELEVATE the report (msg->MSG) to see it
-                # because get-file-rev treats nonexistance as a MINOR error
-                if {!$probe && "$MSG" == ""} {set MSG $msg}
-            }
-
-        # Otherwise allow 'probe' to control if we complain or not
-        } elseif {$probe} { return 1 } { set MSG "File '$fn' does not exist" }
+        if {$probe} { return 1 } { set MSG "File '$fn' does not exist" }
     } elseif {[file isfile $fn]} {
         set finfo(${A}lbl,$ndx) [shortNm [set finfo(${A}pth,$ndx) "$fn"]]
     } else { set MSG "'$fn' exists, but is not a file" }
@@ -2329,6 +2310,7 @@ proc assemble-args {} {
     set MSG [set msg {}]
     set Err [set cnt 0]
 
+    # A 'conflict' file is a special animal (1 file representing 1->3 files)!
     if {$g(conflictset)} {
         if {$revs == 0 && $pths == 1} {
             #################################################################
@@ -2338,14 +2320,64 @@ proc assemble-args {} {
             # Conflict files can come from multiple SCM toolsets, or even a
             #   'diff3 -m Mine [Ancestor] Yours' command. The names entered
             #   into finfo are DERIVED from embedded MARKER lines inside it
-            #   (while the CONTENT is now in separate tmpfiles).
+            #   (while the CONTENT gets spread out into separate tmpfiles).
             set cnt [split-conflictfile "$finfo(f,1)" $cnt]
         } else {
             set msg "'-conflict' run can specify ONLY 1 filespec (we saw $pths)"
             set Err 1
         }
+
+    # Identify input PATTERN (#Fspecs and #Revs) and ASSEMBLE pairs from it
     } else {
-        if {$revs <= 2 && $pths == 0} {
+        # DETERMINE the proper SCM(s) to request individual files (when needed)
+        foreach N {1 2} {  
+            #   ('shorten' the VARname(s) - conserves coding linespace later)
+            set f($N) $finfo(f,$N)   ;   set r($N) $finfo(rev,$N)
+
+            # VOTE which SCM to use (pths==0 uses a DIFFERENT Vote strategy)
+            if {$N <= $pths} {
+                # Ensure a POSSIBLE ~User/whatever... is a REAL user(?)
+                # N.B> ??? This SHOULDN'T fail (but has). After all:
+                #         LOGIC says    No user --> No file!
+                # TCL acts capricious on this LOGICAL point; Just DONT CRASH!!
+                # N.B> BUT - when OK, tildechk results w/LAST Fspec existence!
+                if {[catch {file exists $f($N)} tildechk]} { set Err 1; break }
+
+                set ScmVote [lindex $g(scmPrefer) $N-1]    ;# obtain preference
+                set Scm($N) [scm-elect [scm-detect $f($N) None] $ScmVote]
+            } { set Scm($N) {} }
+
+            # *User provided* REV data is summarily IGNORED for "Vpath" -
+            #       (because no definitive Rev-ID actually exists)
+            #   REWRITE it (for now) as ALWAYS wanting the "latest" revision
+            if {$Scm($N) == "Vpath"} { set r($N) 0 }
+        }
+
+        # PAY ATTENTION:
+        # REV data *may* have been preserved/invented/overwritten above
+        #   RECOMPUTE the count before proceeding further and adjust for
+        # what said count could MEAN to identifying the correct PAIRING.
+        if {!$Err} {    set revs 2
+            if {$pths>1 && $r(2) == ""} { incr revs -1 }
+            if {$r(1) == ""}            { incr revs -1 }
+
+            # Its 'Vpath' (of course) that needs the help - and its all about
+            # when to ask for PRIOR instead of the (defaulted) TOPMOST
+            if {$pths<2 && $revs>0 && $Scm(1) == "Vpath"
+            && (($Scm(2) == "Vpath" || $Scm(2) == "")
+            ||  ($Scm(2) != "Vpath" && $tildechk))} { incr r(1) }
+            # N.B> Obtuse logic is to ID when the Left window is under
+            #   Vpath control, and the Right could GRAB the SANDBOX file
+            #   which would amount to THE SAME FILE, hence setup for PRIOR!
+        }
+
+        Dbg " PAIRing SCM($Scm(1)/$Scm(2)) Fspec($pths) Rev($revs) Tchk($tildechk)"
+
+        # UNLESS the input has been deemed UNUSABLE ...
+        if {$Err} { set msg $tildechk
+
+        # ... DERIVE the given input PATTERN into PAIRED file set(s)
+        } elseif {$revs <= 2 && $pths == 0} {
             #################################################################
             #  tkdiff       (inquiry or interactive)  (simply NO input given)
             #                        -OR-
@@ -2359,11 +2391,12 @@ proc assemble-args {} {
             # to error msgs (if revs were given).
             # Note that DETECTING the SCM was based on the current PROCESS dir
             # and that 'scmPrefer' used here is DERIVED from the preference
+            #   N.B> 'SScm' (Srch-SCM): so named to avoid array/scalar conflict
             if {$g(scmDOsrch)} {
-                set Scm [lindex $g(scmPrefer) $g(scmDOsrch)-1]    ;# VOTE first
-                set Scm [scm-elect $finfo(scm$g(scmDOsrch)) $Scm] ;# then ELECT
-            } else {set Scm [concat $g(scmPrefer)]};# <-- it WONT be searchable
-            switch -glob -- "$Scm" {
+                set SScm [lindex $g(scmPrefer) $g(scmDOsrch)-1]    ;#VOTE first
+                set SScm [scm-elect $finfo(scm$g(scmDOsrch)) $SScm];#then ELECT
+            } else {set SScm [concat $g(scmPrefer)]};# <-- it WONT be searchable
+            switch -glob -- "$SScm" {
             GIT {
                 # N.B: An input syntax of '-r ' (or '-r " "') is the Git Index
                 if {$opts(autoSrch) || $g(scmDOsrch)} {
@@ -2371,7 +2404,7 @@ proc assemble-args {} {
                         incr cnt -[set Err 1]
                     }
                 } else { set Err 1
-                    set msg "You denied access for $Scm to search for files"
+                    set msg "You denied access for $SScm to search for files"
                 }
             }
 
@@ -2384,7 +2417,7 @@ proc assemble-args {} {
                     }
                     restore-cursor
                 } else { set Err 1
-                    set msg "You denied access for $Scm to search for files"
+                    set msg "You denied access for $SScm to search for files"
                 }
             }
 
@@ -2397,22 +2430,22 @@ proc assemble-args {} {
                     }
                     restore-cursor
                 } else { set Err 1
-                    set msg "You denied access for $Scm to search for files"
+                    set msg "You denied access for $SScm to search for files"
                 }
             }
 
             "* *" {
                 set msg "no searchable SCM was detected/designated\n"
-                if {([lindex $Scm 0] != ""     && [lindex $Scm 1] != "") \
-                &&  ([lindex $Scm 0] != "Auto" || [lindex $Scm 1] != "Auto")} {
-                    append msg "      were your SCM settings '$Scm' at fault ?"
+                if {([lindex $SScm 0]!= ""     && [lindex $SScm 1]!= "") \
+                &&  ([lindex $SScm 0]!= "Auto" || [lindex $SScm 1]!= "Auto")} {
+                    append msg "      were your SCM settings '$SScm' at fault ?"
                 }
                 set Err 1
             }
 
             default {
-                if {"$Scm" != "" } {
-                    set msg "the $Scm SCM system needs at least 1 Fspec given"
+                if {"$SScm" != "" } {
+                    set msg "the $SScm SCM system needs at least 1 Fspec given"
                 } { set MSG "no SCM was detected for the current directory" }
                 set Err 1
             }
@@ -2423,8 +2456,6 @@ proc assemble-args {} {
             #  tkdiff       FILESPEC  (file in, dir at, URL .vs.) SCM sandbox
             #  tkdiff -rREV FILESPEC             with or without a revision)
             #################################################################
-            set f(1) "$finfo(f,1)"   ; set f(2) "$finfo(f,2)"
-            set r(1) "$finfo(rev,1)" ; set r(2) "$finfo(rev,2)"
 
             # URL 'side' is determined by which arg was first: Fspec or Rev
             # Any other arg syntax is ALWAYS Left =SCM(@REV) and Right =File
@@ -2433,9 +2464,9 @@ proc assemble-args {} {
                     set MSG "There is NO point in comparing a file to itself"
                     set Err 1
                 } {
-                    if {[get-file-rev "$f($O($URL))" $O($URL) "$r($O($URL))"]} {
+                    if {[get-file-rev "$f($O($URL))" $O($URL) "$r($O($URL))" $Scm($O($URL))]} {
                         array unset finfo "\[ptl]*,$O($URL)" ; set Err 1
-                    } elseif {[get-file-rev "$f($URL)" $URL "$r($URL)"]} {
+                    } elseif {[get-file-rev "$f($URL)" $URL "$r($URL) $Scm($URL)"]} {
                         array unset finfo "\[ptl]*,\[12]" ; set Err 1
                     } else {incr cnt 2}
                 }
@@ -2444,7 +2475,7 @@ proc assemble-args {} {
                 foreach P [glob -nocomplain -directory $f(1) -types f *] {
                     set f(2) "[file join $f(1) [file tail $P]]"
                     # N.B> Uses names IN Sandbox to PROBE the SCM
-                    if {[get-file-rev "$f(2)" $cnt+1 "$r(1)" {} 1]} {
+                    if {[get-file-rev "$f(2)" $cnt+1 "$r(1)" $Scm(1) 1]} {
                         array unset finfo "\[ptl]*,[expr $cnt+1]" ; set Err 1
                     } elseif {[get-file "$f(2)" $cnt+2 1]} {
                         array unset finfo "\[ptl]*,[expr $cnt+1]" ; set Err 1
@@ -2452,7 +2483,7 @@ proc assemble-args {} {
                     } else {incr cnt 2}
                 }
             } else {
-                if {[get-file-rev "$f(1)" 1 "$r(1)"]} {
+                if {[get-file-rev "$f(1)" 1 "$r(1)" $Scm(1)]} {
                     array unset finfo "\[ptl]*,1" ; set Err 1
                 } elseif {[get-file "$f(1)" 2]} {
                     array unset finfo "\[ptl]*,\[12]" ; set Err 1
@@ -2463,23 +2494,21 @@ proc assemble-args {} {
             #################################################################
             #  tkdiff -rREV1 -rREV2 FILESPEC    (file in, dir at) SCM sandbox
             #################################################################
-            set r(1) "$finfo(rev,1)"
-            set r(2) "$finfo(rev,2)"
-            if {[file isdirectory [set P $finfo(f,1)]]} {
+            if {[file isdirectory [set P $f(1)]]} {
                 foreach f(2) [glob -nocomplain -directory $P -types f *] {
                     set f(1) "[file join $P [file tail $f(2)]]"
                     # N.B> Uses names IN Sandbox to PROBE the SCM
-                    if {[get-file-rev "$f(1)" $cnt+1 "$r(1)" {} 1]} {
+                    if {[get-file-rev "$f(1)" $cnt+1 "$r(1)" $Scm(1) 1]} {
                         array unset finfo "\[ptl]*,[expr $cnt+1]" ; set Err 1
-                    } elseif {[get-file-rev "$f(2)" $cnt+2 "$r(2)" {} 1]} {
+                    } elseif {[get-file-rev "$f(2)" $cnt+2 "$r(2)" $Scm(2) 1]} {
                         array unset finfo "\[ptl]*,[expr $cnt+1]" ; set Err 1
                         array unset finfo "\[ptl]*,[expr $cnt+2]"
                     } else {incr cnt 2}
                 }
             } else {
-                if {[get-file-rev "$P" 1 "$r(1)"]} {
+                if {[get-file-rev "$P" 1 "$r(1)" $Scm(1)]} {
                     array unset finfo "\[ptl]*,1" ; set Err 1
-                } elseif {[get-file-rev "$P" 2 "$r(2)"]} {
+                } elseif {[get-file-rev "$P" 2 "$r(2)" $Scm(2)]} {
                     array unset finfo "\[ptl]*,\[12]" ; set Err 1
                 } else {incr cnt 2}
             }
@@ -2488,8 +2517,6 @@ proc assemble-args {} {
             ############################################################
             #  tkdiff FILESPEC1 FILESPEC2         (dirs, files or mixed)
             ############################################################
-            set f(1) $finfo(f,1)
-            set f(2) $finfo(f,2)
 
             # One, the other, or both may be directories
             # Regardless, the same FILE name must exist in EACH to be paired
@@ -2541,16 +2568,14 @@ proc assemble-args {} {
             #   (+)  [-rREV2] FILESPEC2        (same or distinct) SCM sandbox
             #      (can compare ACROSS a branch/WC boundary or distinct SCMs)
             #################################################################
-            set f(1) $finfo(f,1) ; set r(1) "$finfo(rev,1)"
-            set f(2) $finfo(f,2) ; set r(2) "$finfo(rev,2)"
             if {[file isdirectory $f(1)] && [file isdirectory $f(2)]} {
                 foreach P [glob -nocomplain -directory $f(1) -types f *] {
                     # Uses sandboxes for name intersection - thus NOT probing!
                     if {![file isfile [set fn2 [file join $f(2) $P]]]} {
                             continue} {set fn1 [file join $f(1) $P]}
-                    if {[get-file-rev "$fn1" $cnt+1 "$r(1)"]} {
+                    if {[get-file-rev "$fn1" $cnt+1 "$r(1)" $Scm(1)]} {
                         array unset finfo "\[ptl]*,[expr $cnt+1]" ; set Err 1
-                    } elseif {[get-file-rev "$fn2" [expr $cnt+2] "$r(2)"]} {
+                    } elseif {[get-file-rev "$fn2" [expr $cnt+2] "$r(2)" $Scm(2)]} {
                         array unset finfo "\[ptl]*,[expr $cnt+1]" ; set Err 1
                         array unset finfo "\[ptl]*,[expr $cnt+2]"
                     } else { incr cnt 2 }
@@ -2561,16 +2586,16 @@ proc assemble-args {} {
             } elseif {[file isdirectory $f([set i 1])] ||
                       [file isdirectory $f([set i 2])]} {
                 set P "[file join $f($i) [file tail $f($O($i))]]"
-                if {[get-file-rev "$P" $cnt+1 "$r($i)"]} {
+                if {[get-file-rev "$P" $cnt+1 "$r($i)" $Scm($i)]} {
                     array unset finfo "\[ptl]*,[expr $cnt+1]" ; set Err 1
-                } elseif {[get-file-rev "$f($O($i))" $cnt+2 "$r($O($i))"]} {
+                } elseif {[get-file-rev "$f($O($i))" $cnt+2 "$r($O($i))" $Scm($O($i))]} {
                     array unset finfo "\[ptl]*,[expr $cnt+1]" ; set Err 1
                     array unset finfo "\[ptl]*,[expr $cnt+2]"
                 } else { incr cnt 2 }
             }  else {
                 # N.B> for EACH Fspec, we ALLOW an SCM (if permissable)
                 if {($URL&1) || $r(1)!=""} {
-                    if {[get-file-rev "$f(1)" 1 "$r(1)"]} {
+                    if {[get-file-rev "$f(1)" 1 "$r(1)" $Scm(1)]} {
                         array unset finfo "\[ptl]*,1" ; set Err 1}
                 } elseif {!($URL&1)} {
                     if {[get-file "$f(1)" 1]} {
@@ -2578,7 +2603,7 @@ proc assemble-args {} {
                 }
                 
                 if { !$Err && (($URL&2) || $r(2)!="")} {
-                    if {[get-file-rev "$f(2)" 2 "$r(2)"]} {
+                    if {[get-file-rev "$f(2)" 2 "$r(2)" $Scm(2)]} {
                         array unset finfo "\[ptl]*,\[12]" ; set Err 1}
                 } elseif {!$Err && !($URL&2)} {
                     if {[get-file "$f(2)" 2]} {
@@ -3493,6 +3518,18 @@ proc multiFile {command args} {
                 } { grid [radiobutton $w(mFlist).b$i  -variable mFactivE  \
                          -value $i -text  $finfo(lbl,[expr {$i * 2 - 1}]) \
                          -command [list multiFile jump $i]] -sticky "w"
+
+                    # Unfortunately ALSO must snag Mousewheel events sent
+                    # to the buttons (because they OVERLAID the canvas)
+                    if {$w(wSys) == "x11"} {
+                        bind $w(mFlist).b$i <Button-4> {multiFile scroll -1}
+                        bind $w(mFlist).b$i <Button-5> {multiFile scroll  1}
+                    } elseif {$w(wSys) == "aqua"} {
+                        bind $w(mFlist).b$i <Option-MouseWheel> \
+                                {multiFile scroll [expr {%D>=0 ? -5:5}]}
+                    }
+                    bind $w(mFlist).b$i <MouseWheel> \
+                        {multiFile scroll [expr {%D>=0 ? -1:1}]} ;# Up/Dwn
                 }
             }
 
@@ -9252,26 +9289,36 @@ proc main {} {
     }
     if {$w(wSys) == "aqua"} { get_aqua_params }
 
-# Ordinarily the CWD points at/under the TOPMOST Vpath node (when they exist)
-# But *IFF* CWD points to a deeper Vnode, use it to TOP-prune the lead elements
-#   (allows user to review "versions" earlier than the most recent two without
-#    having to explicitly edit the VPATH EnvVar itself)
-if {[info exists finfo(Vpath)]} {
-    if {[set finfo(Vpofst) -1] && [incr finfo(Vpofst) [is-vpath "."]]} {
-        set finfo(Vpath) [lrange $finfo(Vpath) end-$finfo(Vpofst) end]
-    }
-}
+    # Ordinarily the CWD points at/under the TOPMOST Vpath node (IFF they exist)
+    # But *IFF* located deeper, use that position to TOP-prune the lead elements
+    #   (allows user to review "versions" earlier than the most recent two
+    #    WITHOUT having to explicitly modify the VPATH EnvVar itself)
+    if {[info exists finfo(Vpath)]} {
+        if {[set finfo(Vpofst) [is-vpath "."]]} {
+            set finfo(Vpath) [lrange $finfo(Vpath) [incr finfo(Vpofst) -1] end]
 
-#   Begin by interpolating command args
-#
-#       'commandline' will EXIT if args are INCORRECT/INVALID, or pass
-#   control to 'newDiff' if simply missing; EITHER of which will,
-#   in turn, invoke 'assemble-args' to OBTAIN the first (or only)
-#   pairing of actual files to DIFF. If MULTIPLE pairs resulted from
-#   that proc, SUBSEQUENT pairings will be chooseable via the GUI.
-#   Insufficient pairings results in a "Retry" or an "Abort" based on
-#   having USED 'newDiff' or 'commandline' respectively, AND further
-#   conditioned on having encountered a HARD error (.vs. a warning).
+            # Further, adjust EACH Vpath NODE to designate itself as within any
+            # SUBDIRs implied by CWD being farther than the stated VPATH edge
+            set len [string length [lindex $finfo(Vpath) [set i 0]]]
+            if {[set subdir [string range [pwd] $len end]] != {}} {
+                foreach node $finfo(Vpath) {
+                    lset finfo(Vpath) $i "${node}$subdir" ; incr i
+                }
+            }
+        }
+        Dbg "Final EFFECTIVE Vpath $finfo(Vpath)"
+    }
+
+    #   Begin by interpolating command args
+    #
+    #       'commandline' will EXIT if args are INCORRECT/INVALID, or pass
+    #   control to 'newDiff' if simply missing; EITHER of which will,
+    #   in turn, invoke 'assemble-args' to OBTAIN the first (or only)
+    #   pairing of actual files to DIFF. If MULTIPLE pairs resulted from
+    #   that proc, SUBSEQUENT pairings will be chooseable via the GUI.
+    #   Insufficient pairings results in a "Retry" or an "Abort" based on
+    #   having USED 'newDiff' or 'commandline' respectively, AND further
+    #   conditioned on having encountered a HARD error (.vs. a warning).
 
     if {[commandline] > 0 || [newDiff]} {
         while {[set rcod [assemble-args]] < 2} {
@@ -11199,13 +11246,23 @@ While most SCM systems are generally some form of database with some method of\
       additional 'version' of some <cmp>Fspec</cmp> to create a pairing, it\
       searches down the list finding the first-matched filename as the needed\
       "predecessor" file. Some people like to think of this as a 3-dimensional\
-      filesystem, but its most important properties is that the topmost\
-      directory (where $g(name) must be invoked) is what other SCMs would\
+      filesystem, but its most important properties are that the topmost\
+      directory (under which $g(name) is invoked) is what other SCMs would\
       consider its Sandbox, and EACH directory need only have the files that\
       are unique (ie. changed). Thus each directory represents a "changeset"\
       across all the files it specifies collectively. This particular form of\
       <cmp>REV</cmp>s are simply inherent in the "Vpath" implementation, and\
-      are <itl>never</itl> actually specifed as arguments.
+      are <itl>never</itl> actually specifed as arguments. However, the CWD\
+      can interact with a stated VPATH in two important ways:
+      1. when the CWD matches a Vpath node OTHER than the topmost; and
+      2. when the CWD specifies a Subdirectory of the matched Vpath node.
+In the first case, any Nodes SKIPPED are treated as-if they were never\
+      mentioned at all. This enables reaching DEEPER into the version history\
+      by "top-pruning" the latest nodes. In the second, it establishes the\
+      named Subdirectory as the subset of versioned files of interest. Fspecs\
+      specified as outside BOTH adjusted containments are treated as NOT\
+      within the VPATH, and thus ineligible to be "found" as a pairing, despite\
+      being directly available as just a "plain file" Fpec.
 
 Additionally, some SCM systems provide abilities that can identify which of\
       their files are <itl>different</itl> given <itl>only</itl> some set of\
@@ -11416,11 +11473,12 @@ Although $g(name) was designed as a frontend to the classic, UNIX derived,\
       Accordingly, any option flag having a leading dash that is <itl>not</itl>\
       recognized as a $g(name) option is passed <itl>almost untouched</itl>\
       to your Diff engine of choice. This "pass through" feature permits you to\
-      <itl>temporarily</itl> alter the way the Diff engine is called, without\
-      resorting to a change in your preferences file. However it also means\
-      that to use, for example, the "-d" option for GNU diff (which\
-      <itl>is</itl> a $g(name) option), you would need to pass it using its\
-      long-form equivalent of "--minimal" (to avoid the mis-interpretation).
+      <itl>temporarily</itl> alter the way the Diff engine is called,\
+      <itl>for the entire session</itl>, without resorting to a change in your\
+      preferences file. However it also means that to use, for example, the\
+      "-d" option for GNU diff (which <itl>is</itl> a $g(name) option), you\
+      would need to pass it using its long-form equivalent of "--minimal" (to\
+      avoid the mis-interpretation).
       But as a related issue, trying to pass <itl>any</itl> option that\
       requires a <bld>value</bld> <itl>MAY</itl> necessitate an unusual form\
       of quoting to preserve syntactically required "white space" characters.\
