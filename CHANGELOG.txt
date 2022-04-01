@@ -1,3 +1,22 @@
+5.4		(04/01/2022):
+     * Visual Inline-diff SUPPRESSION categories (correlatable to those of Diff) supported
+       yet specific choices are INDEPENDANT of said same Diff MATCH suppressions
+     * Optional support for MULTIPLE Preference files w/command-line specification added
+       permits user configuration for disjoint projects w/alternate SCM requirements
+     * Reengineered optional SyncScroll to no longer permit fractured alignment - FOREVER
+       only specific features may TEMPORARILY override the Preference when set.
+     * New preference allows specifying filename patterns to EXCLUDE from searches among
+       directories when forming canidate pairings for examination.
+     * Text searching now (optionally) scrolls EITHER/BOTH windows independent of the current
+       overall synchronized window preference setting. Allows visual alignment between the
+       displayed file content based on individual text searches per each window.
+     * Within Vpath SCM context, CWD location now effectively TOP-prunes stated VPATH 
+       nodes allowing access to yet older V-nodes w/o editting VPATH 
+     * Subdirs WITHIN given Vpath nodes now recognized as legitimate CWD-scoped locations
+       permitting operations on directory-based subdivisions while STILL Vpath'd
+     * Repaired how Vpath searches for Topmost and/or Prior version for consistent results
+     * MouseWheel now scrolls properly when above checkbuttons WITHIN the filelist Dialog
+
 5.3		(12/24/2021):
      * Added VPATH handling, integrated to appear as yet another SCM system.
      * Tkt#83 - repaired a (V5.2) syntax fault of Directory-based filename generation
@@ -29,7 +48,7 @@
      * Visible Focus-tabbing restored to dir/file browser buttons in NewDiff dialog
 
 5.1             (11/11/2020):
-     * Now supports user cutomization of keyboard function bindings
+     * Now supports user customization of keyboard function bindings
      - new 4th preferences Tab allows review, editting and saving of such bindings
      * Failure-modes for user involved input is now more forgiving (w/feedback)
      - applies to preference modifications and/or inconsistent run-modes.
