@@ -4239,7 +4239,7 @@ set textROfcn {
 
     # The rest of this code applies ONLY to the L/R main display windows:
     #   (N.B> A Text widget NAMING vulnerability is exposed here)
-    if {[string match {.client.*.text} $This]} {
+    if {[string match {.client.[rl]*.text} $This]} {
 
         # If the Line comparison window is visible AND the window insertion
         # cursor MOVED to a NEW line, then update the comparison display
