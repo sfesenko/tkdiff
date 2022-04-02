@@ -4015,7 +4015,7 @@ proc build-client {} {
     #      widgets, so PLANT a trace to ensure it ALWAYS STAYS that way
     trace add var w(acTxWdg) write { apply {{ary elem op} {
         upvar $ary gbl
-        if {![string match {.client.*.text} $gbl($elem)]} {
+        if {![string match {.client.[lr]*.text} $gbl($elem)]} {
             set gbl($elem) $gbl(PREV$elem)
         }
         set gbl(PREV$elem) $gbl($elem)
@@ -6141,7 +6141,7 @@ proc customize {} {
         # add validation to enable/disable BOTH 'ignore(blanksopt/RegexLnopt)'
         # then initialize them into agreement
         trace add var tmpopts(ignoreblanks)  write "alignTrState $frame.e2"
-        trace add var tmpopts(ignoreRegexLn) write "alignTrState $frame.e5"
+        trace add var tmpopts(ignoreRegexLn) write "alignTrState $frame.e6"
         alignState $frame.e2 $tmpopts(ignoreblanks)
         alignState $frame.e6 $tmpopts(ignoreRegexLn)
 
