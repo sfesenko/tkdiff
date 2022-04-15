@@ -33,7 +33,7 @@ package require Tk 8.5
 
 # set a couple o' globals that we might need sooner than later
 set g(name)    "TkDiff"
-set g(version) "5.4"
+set g(version) "5.4.1"
 set g(debug)     0  ;# Master setting - Initialized (by default) to false
 
 # get this out of the way -- we want to draw the whole user interface
@@ -4571,7 +4571,7 @@ proc LCSvbc {ops
                       || ($ops&$Wcnt && $C1sp<0 && (($C1sp<0) == ($C2sp<0)))} {
                     while {$E1 < $M1 && $C1sp<0} {
                                             set C1sp [lindex $SP1 [incr E1]] }
-                    while {$E2 < $M2 && $C2sp} {
+                    while {$E2 < $M2 && $C2sp<0} {
                                             set C2sp [lindex $SP2 [incr E2]] }
                     continue;
 
@@ -4672,7 +4672,7 @@ proc ROwalk {hID pairID ops   s1 off1 len1 SP1 M1eol   s2 off2 len2 SP2 M2eol} {
     }
 
     # When one or both strings do not subdivide, the REMAINDER is marked as 'different'
-    # Yet options "-w"(2) or "-Z"(8) can STILL affect WHICH chars to NOT mark
+    # Yet option "-w"(8) can STILL affect WHICH chars to NOT mark
 
     # RIGHT-side markings:
     if {$len2 && (!$len1 || !$cnt)} {
@@ -5610,8 +5610,11 @@ proc setBinds {args} {
     foreach btag $args {
 
         if {[string match {.client.*} $btag]} {
-            # (skip client elements we dont care about: ancFile, grip, frames)
+            # Skip client elements we dont care about:
+            #       ancFile, grip, scrollbars, labels, frames)
             if {[string match {.client.[ag]*} $btag]
+            ||  [string match {.client.*sb}    $btag]
+            ||  [string match {.client.*label} $btag]
             || [winfo class $btag]=="Frame"} { continue }
 
             if {[string match {*.info} $btag]} {
