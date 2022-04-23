@@ -5214,10 +5214,13 @@ proc build-toolbar {} {
 
     # The combo box
     set w(combo) $tb.combo
-    ::combobox::combobox $w(combo) -bd 1 -editable 0 -width 20 -command moveTo
+    ttk::combobox $w(combo) -width 20
     #  (do these NOW (no point in kludging up 'setBind'); FIXES focus-Tabbing)
         bind $w(combo) <<PrevWindow>> "[bind all <<PrevWindow>>] ; break"
         bind $w(combo) <<NextWindow>> "[bind all <<NextWindow>>] ; break"
+        bind $w(combo) <<ComboboxSelected>> {
+          set idx [$w(combo) current]; incr $idx; move $idx 0 1
+        }
 
     # Next, the simple BUTTONS (table driven enforces visual/naming uniformity)
     #   Using a "factory" approach cuts down on the code verbosity somewhat.
@@ -6671,9 +6674,9 @@ proc editLstPref {key args} {
 proc editLstFeedback {wdg msg} {
     # Pretend to enter a new value (but dont let the command fire) ... then
     # 1250ms later, clear with an EMPTY value (and LET it fire w/no effect)
-    $wdg configure -commandstate disabled
+    $wdg configure -state disabled
     $wdg configure -value "$msg"
-    after 1250 "$wdg configure -commandstate normal -value {}"
+    after 1250 "$wdg configure -state normal -value {}"
 }
 
 ###############################################################################
@@ -8088,6 +8091,7 @@ proc moveNearest {window mode args} {
 
 ###############################################################################
 # this is called to decode a combobox entry into which hunk to jump to
+# FIXME: this isn't used, can it be deleted?
 ###############################################################################
 proc moveTo {window value} {
     global g w
@@ -8133,6 +8137,7 @@ proc move {value {relative 1} {setpos 1}} {
     #       set-dtags does NOTHING except to jump L/R/merge windows to line 1.0
     #       irrespective of the value for $setpos
     set g(currdiff) [set-dtags [hunk-id $g(pos)] currtag "" $setpos]
+    set g(diffchunkcurrent) "$g(pos): $g(currdiff)"
 
     # update the buttons, etc.
     update-display
@@ -8247,11 +8252,11 @@ proc update-display {} {
     if {$g(count)} {
         # update the combobox. We don't want its command to fire, so
         # we'll disable it temporarily
-        $w(combo) configure -commandstate "disabled"
+        $w(combo) configure -state "disabled"
         set i [expr {$g(pos) - 1}]
-        $w(combo) configure -value [lindex [$w(combo) list get 0 end] $i]
+        $w(combo) configure -textvariable g(diffchunkcurrent) -values $g(diffchunks)
         $w(combo) selection clear
-        $w(combo) configure -commandstate "normal"
+        $w(combo) configure -state "normal"
 
         # Merge choices and hunk centering
         foreach buttonpref {im tx} {
@@ -8467,7 +8472,7 @@ proc wipe-window {} {
         set g(destroy) ""                                           \
     }
 
-    $w(combo) list delete 0 end
+    $w(combo) configure -values {}
 
     bkmark eraseall
 }
@@ -8583,9 +8588,9 @@ proc ignore-hunk {} {
     # Then re-categorize the current hunk
     if {![mark-diffs [list $hID [string map {a A c C d D} $hID]]]} {
         set g(pos) $i
-        $w(combo) configure -commandstate disabled
+        $w(combo) configure -state disabled
         $w(combo) configure -value {}
-        $w(combo) configure -commandstate normal
+        $w(combo) configure -state normal
         after idle {show-status "Files now APPEAR as identical"}
     } { move $i 0 1 }
     update-display
@@ -8608,7 +8613,7 @@ proc mark-diffs {{rmvrpl {}}} {
         set Lpad [set Rpad {}]      ;# (tmps for scheduling Pad-line removal)
         set hack {}                 ;# Dont need the responsiveness hack ...
         set g(startPhase) 1         ;# ... but RE-suspend "plot-line-info"
-        $w(combo) list delete 0 end ;# ComboBox will simply be RE-loaded
+        $w(combo) configure -value {} ;# ComboBox will simply be RE-loaded
 
         # Next do the REMOVEs of hunks from the diff list FIRST (including all
         # that depends on them) ... REPLACing with the NEW hunks before return.
@@ -8863,11 +8868,11 @@ proc mark-diffs {{rmvrpl {}}} {
 
         # Append entry into combobox (and hilight when its a 3way collision)
         if {[string is lower "$type"]} {
-            $w(combo) list insert end \
-                             "[set item [format "%*d: %s" $fmtW $g(count) $d]]"
-            if {[info exists g(overlap$d)]} {
-                $w(combo) list itemconf end -background $opts(mapolp)
-            }
+            lappend g(diffchunks) "[set item [format "%*d: %s" $fmtW $g(count) $d]]"
+            set g(diffchunkcurrent) [lindex $g(diffchunks) 0]
+            #if {[info exists g(overlap$d)]} {
+                #$w(combo) list itemconf end -background $opts(mapolp)
+            #}
             # measure its width, remembering the LONGEST entry seen ...
             #   This is a bit of a pain: the width is SPECIFIED by charCOUNT
             # of an AVERAGE (aka '0') character, but WE have a space+colon and
@@ -9712,9 +9717,9 @@ proc rediff {} {
     if {$diffRC} {show-status "Marking differences..."}
 
     if {![mark-diffs]} {
-        $w(combo) configure -commandstate disabled
+        $w(combo) configure -state disabled
         $w(combo) configure -value {}
-        $w(combo) configure -commandstate normal
+        $w(combo) configure -state normal
         if {"$Statmsg" == ""} {
             # Unless something FORCED us to not perform/complete the
             # diff, this HAS to be the reason there just ARE zero hunks!
