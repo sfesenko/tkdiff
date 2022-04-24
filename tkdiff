@@ -5219,7 +5219,7 @@ proc build-toolbar {} {
         bind $w(combo) <<PrevWindow>> "[bind all <<PrevWindow>>] ; break"
         bind $w(combo) <<NextWindow>> "[bind all <<NextWindow>>] ; break"
         bind $w(combo) <<ComboboxSelected>> {
-          set idx [$w(combo) current]; incr $idx; move $idx 0 1
+          set idx [$w(combo) current]; incr idx; move $idx 0 1
         }
 
     # Next, the simple BUTTONS (table driven enforces visual/naming uniformity)
