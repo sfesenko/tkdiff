@@ -1,3 +1,25 @@
+5.5		(07/21/2022)
+     * CRITICAL logic repair to 'blanks' suppression support during INLINE hilite!
+     * Alternate coding fix to vague (Mac observed) race-condition bug w/combobox mis-creation.
+     * Added status display of merge choice counts presently targetted as pure Left or Right
+     * Popup menu disables "Edit" (file) when POP occurs over DiffMap (not a L/R window).
+       -    BUT is now active over most window elements having a Left/Right connotation.
+       -    'Find Nearest' selected above DiffMap evaluates choice at SCALED chosen position.
+     * Codified preference 'upgrade' detection, yeilding safer 'new version' transitions.
+     * Internal: Preference evolution of older settings now tied to explicit versioning data 
+     * Created "Engine config" Prefs tab:
+       - permits access to other Diff engines having alternate algorithms.
+       - Codifies what is needed/expected FROM the underlying engine and HOW it is accessed.
+       - Still permits ad-hoc flag specs AND cmdline pass-thru.
+       -    former 'diffcmd' Pref now DERIVED from engine settings (for reference purposes)
+       -    former 'ignoreblanks' Pref (on/off) generalized to refer to ALL engine suppressions
+       -    primary engine options (suppressions) now specifically delineated AND configurable
+       -    shares options among Diff and DiffSrch when same command (1st word), else distinct
+     * Added warning HILITE to Preference actions that result in FORCING a new Diff invocation.
+     * Internal: general support for "Unified" Diff outputs, facilitating wider Engine acceptance
+     * Internal: Dbg messaging permits suspended arg-EVAL until KNOWN they are used (less overhead).
+     * Handful of spelling typos, internal naming and code consolidations, as always: updated Help.
+
 5.4		(04/01/2022):
      * Visual Inline-diff SUPPRESSION categories (correlatable to those of Diff) supported
        yet specific choices are INDEPENDANT of said same Diff MATCH suppressions
@@ -6,7 +28,7 @@
      * Reengineered optional SyncScroll to no longer permit fractured alignment - FOREVER
        only specific features may TEMPORARILY override the Preference when set.
      * New preference allows specifying filename patterns to EXCLUDE from searches among
-       directories when forming canidate pairings for examination.
+       directories when forming candidate pairings for examination.
      * Text searching now (optionally) scrolls EITHER/BOTH windows independent of the current
        overall synchronized window preference setting. Allows visual alignment between the
        displayed file content based on individual text searches per each window.
