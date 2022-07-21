@@ -32,8 +32,10 @@ exec wish "$0" -- ${1+"$@"}
 package require Tk 8.5
 
 # set a couple o' globals that we might need sooner than later
+# N.B> version must be roughly formatted as Maj.Minor[.patch][anythingelse]
+#   It is parsed to PROMOTE old Preference data when required
 set g(name)    "TkDiff"
-set g(version) "5.4.1"
+set g(version) "5.5"
 set g(debug)     0  ;# Master setting - Initialized (by default) to false
 
 # get this out of the way -- we want to draw the whole user interface
@@ -63,7 +65,7 @@ proc Dbg {message {force 0} {hdr "Dbg: "} {where stderr}} {
     global g
 
     if {$force >= 0 && ($g(debug) || $force)} {
-        puts $where "$hdr[uplevel 1 concat $message]"
+        puts $where "$hdr[uplevel 1 set na "\"$message\""]"
     }
 }
 
@@ -176,8 +178,8 @@ destroy .native
 
 # Find out what the tk default is
 label .testlbl -text "LABEL"
-set w(background) [lindex [.testlbl cget -background] 0]
-set w(foreground) [lindex [.testlbl cget -foreground] 0]
+set w(bgnd) [lindex [.testlbl cget -background] 0]
+set w(fgnd) [lindex [.testlbl cget -foreground] 0]
 set labelfont [lindex [.testlbl configure -font] 3]
 destroy .testlbl
 
@@ -247,14 +249,20 @@ array set g {
     scmSrch         {CVS GIT SVN}
     showmerge       0
     statusCurrent   "Standby...."
+    statusMrgL      0
+    statusMrgR      0
     statusInfo      ""
     tempfiles       ""
     thumbMinHeight  10
     thumbDeltaY     0
 }
 
+# Widgets often go active AS they are being BUILT... potentially
+# INVOKING callbacks that EXPECT TO FIND critical variables
+# Ensure at least those are PRESENT ahead of time
 array set w {
     bLnum           0
+    prefD           {alertD 0}
 }
 
 set UniQ            0   ;# Generic counter for ensuring UNIQUE object names
@@ -532,14 +540,41 @@ foreach {key val desc} [subst {
     customCode        {}                                                     {}
     deltag        "-background $Pdel -font $bold"
                                           {Tag options for deleted diff region}
-    diffcmd       "diff"                                         {diff command}
+    diffcmd       ""                                             {Diff command}
     difftag       "-background $Pdif"            {Tag options for diff regions}
-    editor         ""                               {Program for editing files}
+    editor        ""                                {Program for editing files}
+    egnCmd        "diff"                                             {Diff cmd}
+    egnSrchCmd    "diff -r"                           {Diff recursive-srch cmd}
+    egnCase           0                             {Suppress Case distinction}
+    egnBlanks         0                               {Suppress all Whitespace}
+    egn#Blanks        0                           {Suppress varying Whitespace}
+    egn@TabX          0                         {Suppress Tab-based Whitespace}
+    egn@EOL           0                               {Suppress EOL Whitespace}
+    egnTabSiz         0                                  {Specify the Tab size}
+    egnSCase          0                        {Suppress Case distinction-srch}
+    egnSBlanks        0                          {Suppress All Whitespace-srch}
+    egnS#Blanks       0                      {Suppress varying Whitespace-srch}
+    egnS@TabX         0                    {Suppress Tab-based Whitespace-srch}
+    egnS@EOL          0                          {Suppress EOL Whitespace-srch}
+    egnSTabSiz        0                             {Specify the Tab size-srch}
+    egnXcludFil       0                        {Specify excluded file patterns}
+    eopCase       "-i"                          {Suppress Case distinction arg}
+    eopBlanks     "-w"                            {Suppress All Whitespace arg}
+    eop#Blanks    "-b"                        {Suppress varying Whitespace arg}
+    eop@TabX      "-E"                      {Suppress Tab-based Whitespace arg}
+    eop@EOL       "-Z"                            {Suppress EOL Whitespace arg}
+    eopTabSiz     " --tabsize"                       {Specify the Tab size arg}
+    eopSCase      "-i"                     {Suppress Case distinction srch-arg}
+    eopSBlanks    "-w"                       {Suppress all Whitespace srch-arg}
+    eopS#Blanks   "-b"                   {Suppress varying Whitespace srch-arg}
+    eopS@TabX     "-E"                 {Suppress Tab-based Whitespace srch-arg}
+    eopS@EOL      "-Z"                       {Suppress EOL Whitespace srch-arg}
+    eopSTabSiz    " --tabsize"                  {Specify the Tab size srch-arg}
+    eopXcludFil   " -x"                          {File patterns to exclude arg}
     fancyButtons  $opts(fancyButtons)           {Windows-style toolbar buttons}
     filetypes     { {"Text Files" {*.txt *.tcl}} {"All Files" {*}} }
                                      {Choice of file suffixes for file dialogs}
     fLMmax            9                           {FileList Menu max-threshold}
-    fRecurs       "-r -q"              {Options for Diff recursive File search}
     geometry      "80x30"                                    {Text window size}
     genEdit       "<e>"                  {Invoke an editor on the Current file}
     genFind       "<Control-f>"         {Request textual search in either file}
@@ -547,11 +582,10 @@ foreach {key val desc} [subst {
     genPvfile     "<Control-bracketright>"      {Switch to prev available file}
     genRecalc     "<Control-r>"          {Request to re-diff current file pair}
     genXit        "<Control-q>"                   {Request Immediate tool exit}
-    ignoreblanks      0                            {Ignore blanks when diffing}
-    ignoreblanksopt  "-b"                         {Options for Ignoring blanks}
     ignoreEmptyLn     0                         {Suppress diffs of empty lines}
     ignoreRegexLnopt  {}                         {RegExp(s) for matching lines}
     ignoreRegexLn     0                {Suppress diffs of RegExp-matched lines}
+    ignSuprs          0               {Utilize Engine suppresions when Diffing}
     inform        "$Pinf"        {Informational highlight: Tooltips + bindings}
     inlinetag     "-background $Pcht -font $bold"
                                {Tag options for diff region inline differences}
@@ -572,7 +606,7 @@ foreach {key val desc} [subst {
     navNext       "<n>"                          {Move CDR to Next Diff region}
     navPrev       "<p>"                      {Move CDR to Previous Diff region}
     overlaptag    "-background $Polp"     {Tag options for overlap diff region}
-    predomMrg         1                              {Predominate merge choice}
+    predomMrg         1                              {Predominant merge choice}
     scmPrefer      {Auto Auto}                 {Prefer given SCM when detected}
     showcbs           1                                      {Show change bars}
     showinline1       0                   {Show inline diffs (per-byte method)}
@@ -592,12 +626,12 @@ foreach {key val desc} [subst {
     xcludeFils        {}                      {Files to exclude when searching}
 }] { set opts($key) $val ; if {$desc != {}} {set pref($key) $desc} }
 # So much for defaulting ... (as mentioned earlier) "BRIEFLY" is now over!
-#   Whack the little vars we used to make adjustments to the option values
-unset Pdel Pins Pchm Polp Padj Pinf Pcur Pdif Pcht Pbyt
+#   Whack all the little vars we used to make adjustments to the option values
+unset Pdel Pins Pchm Polp Padj Pinf Pcur Pdif Pcht Pbyt key desc val
 
 # Further ensure wrapping is turned off. This might piss off a few people,
 # but it would screw up the display ROYALLY to have things wrap
-set opts(textopt) "$opts(textopt) -wrap none"
+lappend opts(textopt) "-wrap none"
 
 # Work-around for bad font approximations,
 # as suggested by Don Libes (libes@nist.gov).
@@ -851,7 +885,7 @@ if {([info exists ::env(TKDIFFRC)] && [set g(rcfile) $::env(TKDIFFRC)]!={})
         } { set g(rcfile) [file join $g(rcdir) $basercfile] }
     }
 
-    # This is terribly anti-social and LIKELY aint write-able ANYWAY!
+    # This is terribly anti-social and LIKELY aint 'save'-able ANYWAY!
     # But it ALLOWS us to "soldier on" using JUST the builtin defaults.
     # and anything the user cares to modify them to in their session.
 } { set g(rcfile) [file join "/" $basercfile] }
@@ -866,12 +900,70 @@ if {[file exists $g(rcfile)]} {
     }
 }
 
-# Small hack to handle older (~ V2.xx+) preferences files...
-#   If user had a diffopt preference defined in their rc file,
-#   we'll magically convert/merge that into diffcmd...
+###############################################################################
+# Preference Morphing (if this were a proc)
+#
+#   RARELY -  an EXISTING preference becomes inconsistent with the evolution
+#           of the code. As we cant know in advance what vintage file was just
+#   read-in, it may have just installed a SEMANTICALLY OLDER Pref. Its useful
+#   to map/adjust (or lat least, remove) such older Prefs (when reasonable).
+#       Each of these "Morphs" chains forward to the next to allow ANY age of
+#   file to be processed UP the evolutionary path: an in-exact science at best!
+# N.B>  While ADDing NEW Prefs is never an issue, installing Prefs NEWER than
+#       the RUNNING code version is PROBLEMATIC - yet is NOTED; ...NOT aborted!
+###############################################################################
+
+# 1st hack (predates files even HAVING the version stamp that WROTE them)
+# V3.0 was the first codebase NEEDING this for (~ V2.xx+) files...
+#       If user has a 'diffopt' Pref defined (from their rc file),
+#       magically convert/merge that to become 'diffcmd'
 if {[info exists opts(diffopt)]} {
+    set opts(diffcmd) "diff"    ;# The V3.0 original DEFAULT value
     lappend opts(diffcmd) {*}$opts(diffopt)
     unset opts(diffopt)
+}
+
+# 2nd hack  (files become version stamped)
+# V4.3.1 Began recording the Codebase version that WROTE the Prefs, but when
+# READ back IN, was placed into a bare GLOBAL Var "prefsFileVersion".
+#       Luckily, no SEMANTICS ever CHANGED in the codebase since that time,
+#       thus nothing needs adjusting beyond the stamp LOCATION itself
+#           (maintaining the evolutionary chain)
+if {[info exists "prefsFileVersioni"]} {
+    set opts(prefsVrsn)   $prefsFileVersion
+    unset $prefsFileVersion
+}
+
+# 3rd   (PERMANENT location of the 'File Version')
+# V5.1 Decided it made more sense to keep the "FV" (fileVrsn) WITH the datums
+# and thus base future MORPHs on the versions themselves.
+#       Morphing is an UPWARD process, all bets are off if the FV is NEWER!
+if {[info exists opts(prefsVrsn)]
+&&  [regexp {[0-9]+(?:\.[0-9]+)*(?:[ab][0-9]+)?} $opts(prefsVrsn) FV]
+&&  [regexp {[0-9]+(?:\.[0-9]+)*(?:[ab][0-9]+)?}   $g(version)    CV]
+&&  [package vcompare $FV $CV] <= 0} {
+
+    # V5.5 Re-oriented how Diff (as an Engine) is CONFIGd for use in TkDiff
+    if {![package vsatisfies $FV "5.5-"]} {
+        # 1. No longer presumes "diffcmd" IS (GNU) Diff (& can append args to)
+        # merges SRCH args into the NEW Srch-cmd (which DEFAULTs to "diff")
+        # 2. Similarly, suppression categories are now explicit (and mapping
+        # the old 'blackbox' flag set is not worth it). Just whack'em; the
+        # resultant All-Suppressions-OFF default lets the USER then RE-config. 
+        # 3. "ignoreblanks" is now "ignSuprs" (same semantics different NAME),
+        #    "ignoreRegexLn" and "ignoreEmptyLn" ALL now bitBased-boolean vals.
+        # 4. "diffcmd" is now DERIVED (as opposed to user-SET) thus will be
+        # rewritten internally (later), requiring no further action.
+        lappend opts(egnSrchCmd) {*}$opts(fRecurs)
+        if {$opts(ignoreEmptyLn)} { set opts(ignoreEmptyLn) 8 }
+        if {$opts(ignoreRegexLn)} { set opts(ignoreRegexLn) 4 }
+        if {$opts(ignoreblanks)}  { set opts(ignSuprs)      2 }
+        unset -nocomplain opts(fRecurs) opts(ignoreblanksopt) opts(ignoreblanks)
+    }
+} else { popmsg "Your Preference file (V$FV) appears to be
+                NEWER
+than the $g(name) V$CV currently running.
+     This MAY NOT operate properly..." warning "Near CRITICAL warning"
 }
 
 ###############################################################################
@@ -918,7 +1010,7 @@ if {[set DbuG [lsearch -inline -glob -all $argv {-d?*}]]!={}} {lappend DbuG --
 }
 
 # AND clean up the global namespace (which wasnt checked before trampling)!!
-unset -nocomplain DbuG basercfile
+unset -nocomplain basercfile
 
 ###############################################################################
 ###############################################################################
@@ -1691,7 +1783,7 @@ proc scm-detect {fn {extra {}}} {
     lappend scms
     if {[file isdirectory [file join $dnam CVS]]}    { lappend scms CVS }
     if {[is-repo-dir ".svn" $dnam]}                  { lappend scms SVN }
-    if {[is-git-repository]}                         { lappend scms GIT }
+    if {[is-repo-git]}                               { lappend scms GIT }
     if {[regexp {://} $fn]}                          { lappend scms SVN }
     if {[sccs-is-bk]}                                { lappend scms BK }
     if {[file isdirectory [file join $dnam SCCS]]}   { lappend scms SCCS }
@@ -1791,7 +1883,7 @@ proc get-file-rev {fn ndx {rev ""} {Scm {}} {probe 0}} {
         set finfo(${A}tmp,$ndx) "$cmd cat $rev \"$fn\""
         }
     GIT {
-        if {[is-git-repository]} {
+        if {[is-repo-git]} {
             # Only works if you are actually INSIDE the work tree
             append cmd "git" $cmdsfx; # Default revision is the 'stage'
             if {[set lbl $rev]==" "  ||  $rev==""} {
@@ -1969,7 +2061,7 @@ proc is-repo-dir {trgnam dirname} {
     return false
 }
 
-proc is-git-repository {} {
+proc is-repo-git {} {
     return [expr [catch {eval "exec git rev-parse --is-inside-work-tree"} err] == 0]
 }
 
@@ -2141,7 +2233,7 @@ proc commandline {} {
                 # Ignore flag generated from "svn diff --diff-cmd=tkdiff"
             }
         "^-B$"  {
-                set opts(ignoreEmptyLn) 1
+                set opts(ignoreEmptyLn) 8
             }
         "^-I$"  {
                 incr argindex
@@ -2181,8 +2273,8 @@ proc commandline {} {
                 # User NAMED (and we already grabbed) the Preference filename
                 #  (just swallow it - CANT be the Diff arg; there IS a value!)
             }
-        "^-" {  # Args not recognized are passed to Diff directly
-                #   (WRONG if it was SUPPOSED to grab next item as its VALUE)
+        "^-" {  # Args not otherwise recognized are passed to Diff directly
+                #   (WRONG if it was SUPPOSED to grab NEXT item as its VALUE)
                 append opts(diffcmd) " " [concat "$arg"]
             }
         default {
@@ -2265,7 +2357,7 @@ proc commandline {} {
     #   - mark merge file as INITIALLY known (thus triggering the merge window)
     #   - turn on Regex line skipping *if* it was added here (else its a pref)
     if {$g(mergefile) != ""} {set g(mergefileset) 1}
-    if {$ignRxs < [llength $opts(ignoreRegexLnopt)]} {set opts(ignoreRegexLn) 1}
+    if {$ignRxs < [llength $opts(ignoreRegexLnopt)]} {set opts(ignoreRegexLn) 4}
 
     return [expr {$revs + $pths}]
 }
@@ -2409,30 +2501,24 @@ proc assemble-args {} {
 
                 set ScmVote [lindex $g(scmPrefer) $N-1]    ;# obtain preference
                 set Scm($N) [scm-elect [scm-detect $f($N) None] $ScmVote]
+
+            # There CANT be a 2nd SCM if there ISNT a second Fspec
+            #   (simply means BOTH Revs - if any - come from the SAME 1st SCM)
             } { set Scm($N) {} }
 
-            # *User provided* REV data is summarily IGNORED for "Vpath" -
+            # PAY ATTENTION:
+            # *User provided* REV data is summarily REMOVED for "Vpath" -
             #       (because no definitive Rev-ID actually exists)
-            #   REWRITE it (for now) as ALWAYS wanting the "latest" revision
-            if {$Scm($N) == "Vpath"} { set r($N) 0 }
-        }
-
-        # PAY ATTENTION:
-        # REV data *may* have been preserved/invented/overwritten above
-        #   RECOMPUTE the count before proceeding further and adjust for
-        # what said count could MEAN to identifying the correct PAIRING.
-        if {!$Err} {    set revs 2
-            if {$pths>1 && $r(2) == ""} { incr revs -1 }
-            if {$r(1) == ""}            { incr revs -1 }
-
-            # Its 'Vpath' (of course) that needs the help - and its all about
-            # when to ask for PRIOR instead of the (defaulted) TOPMOST
-            if {$pths<2 && $revs>0 && $Scm(1) == "Vpath"
-            && (($Scm(2) == "Vpath" || $Scm(2) == "")
-            ||  ($Scm(2) != "Vpath" && $tildechk))} { incr r(1) }
-            # N.B> Obtuse logic is to ID when the Left window is under
-            #   Vpath control, and the Right could GRAB the SANDBOX file
-            #   which would amount to THE SAME FILE, hence setup for PRIOR!
+            #   THAT MEANS having to UN-count that it got passed, but always
+            #   REWRITING it as REQUESTING the *appropriate* "latest" revision
+            if {$Scm($N) == "Vpath" || $pths < $N} {
+                if {$r($N) != ""} { incr revs -1 }
+                set r($N) 0 ; # Presumption is we want the LATEST Vpath version
+                # BUT - if BOTH SCMs come up as Vpath, then the LEFT side needs
+                # to be an EARLIER version than the one that will show up for
+                # the RIGHT side version.
+                if {$N==2 && ($Scm(1) == "Vpath")} { set r(1) 1 }
+            }
         }
 
         Dbg " PAIRing SCM($Scm(1)/$Scm(2)) Fspec($pths) Rev($revs) Tchk($tildechk)"
@@ -2588,7 +2674,7 @@ proc assemble-args {} {
             # Regardless, the same FILE name must exist in EACH to be paired
             if {[file isdirectory $f(1)] && [file isdirectory $f(2)]} {
                 # Should we DO just this one level -or-  Recursively descend ?
-                if {!$finfo(fRecurs) || [string trim $opts(fRecurs)]=={}} {
+                if {!$finfo(fRecurs) || [string trim $opts(egnSrchCmd)]=={}} {
                     foreach P [glob -nocomplain -directory $f(1) -types f *] {
                     if {[xclude $P]} { continue }
                     #N.B. "file isfile xxx" thankfully WON'T fault OS softlinks
@@ -2601,7 +2687,7 @@ proc assemble-args {} {
                         }
                     }
                 # Recursive - go for it!
-                #   but may need to "normalize" cnt/Err if IT posted a message
+                #   but may need to "normalize" cnt/Err if IT posts a message
                 } elseif {[set cnt [inquire-diff]] & 1} {
                     incr cnt -[set Err 1]
                 }
@@ -2636,19 +2722,31 @@ proc assemble-args {} {
             #      (can compare ACROSS a branch/WC boundary or distinct SCMs)
             #################################################################
             if {[file isdirectory $f(1)] && [file isdirectory $f(2)]} {
-                foreach P [glob -nocomplain -directory $f(1) -types f *] {
-                    if {[xclude $P]} { continue }
-                    # Uses sandboxes for name intersection - thus NOT probing!
-                    if {![file isfile [set fn2 [file join $f(2) $P]]]} {
-                            continue} {set fn1 [file join $f(1) $P]}
-                    if {[get-file-rev "$fn1" $cnt+1 "$r(1)" $Scm(1)]} {
-                        array unset finfo "\[ptl]*,[expr $cnt+1]" ; set Err 1
-                    } elseif {[get-file-rev "$fn2" [expr $cnt+2] "$r(2)" $Scm(2)]} {
-                        array unset finfo "\[ptl]*,[expr $cnt+1]" ; set Err 1
-                        array unset finfo "\[ptl]*,[expr $cnt+2]"
-                    } else { incr cnt 2 }
+                # Should we DO just this one level -or-  Recursively descend ?
+                if {!$finfo(fRecurs) || [string trim $opts(egnSrchCmd)]=={}} {
+                    foreach P [glob -nocomplain -directory $f(1) -types f *] {
+                        # Use sandbox for name intersection - thus NOT probing!
+                        if {[xclude $P] || ![file isfile [set F \
+                                [file join $f(2) [file tail $P]]]]} {continue}
+
+                        if {[get-file-rev "$P" $cnt+1 "$r(1)" $Scm(1)]} {
+                            array unset finfo "\[ptl]*,[expr $cnt+1]"
+                            set Err 1
+                        } elseif {[get-file-rev "$F" $cnt+2 "$r(2)" $Scm(2)]} {
+                            array unset finfo "\[ptl]*,[expr $cnt+1]"
+                            array unset finfo "\[ptl]*,[expr $cnt+2]"
+                            set Err 1
+                        } else { incr cnt 2 }
+                    }
+                # Recursive - go for it!
+                #   but may need to "normalize" cnt/Err if IT posts a message
+                } elseif {[set cnt [inquire-diff]] & 1} {
+                    incr cnt -[set Err 1]
                 }
-                if {!$cnt} { set Err 1
+
+                # EITHER method MAY result in NO usable input if they simply
+                # have no actual COMMON filenames
+                if {!$cnt && !$Err} { set Err 1
                     set MSG "Provided Dirs had NO filename in common"
                 }
             } elseif {[file isdirectory $f([set i 1])] ||
@@ -2816,18 +2914,21 @@ proc inquire-diff {} {
     set cnt 0
     set MSG [set msg {}]
 
-    # Ask Diff which files DIFFER in the given directories (recursively)
-    lappend cmd {*}$opts(diffcmd) {*}$opts(fRecurs)
-    if {$opts(ignoreblanks)} {lappend cmd {*}$opts(ignoreblanksopt) }
+    # Will ask Diff which files DIFFER in the given directories (recursively)
+    #   N.B> RE creates 3 filename FIELDS out of the TWO (trailing) fnames by
+    #   FIRST knowing how many OTHER args preceded it. Besides the OVERALL
+    #   match field (#0) returned, the OTHER 3 returned fields will be:
+    #       1st unique prefix, common suffix value, 2nd unique prefix
+    set cmd [formOpts egnSrchCmd]
     set xtractFNre \
         "^diff(?: +\[^ ]*){[expr [llength $cmd] - 1]} +(.+?)(.*) (.+?)\\2\$"
     lappend cmd $finfo(f,1) $finfo(f,2)
 
     show-status "Executing {$cmd}"
     lassign [run-command $cmd] dOUT dERR dRC
+
     # DO NOT RECORD $dRC as g(returnValue) in this context !!
     #   It would be inappropriate as the EXIT code
-
     if {$dRC < 0 || $dRC > 1 || $dERR != ""} {
         set MSG "Diff FAILED (rc=$dRC):\n$dERR"
     } elseif {$dRC == 0} {
@@ -2835,8 +2936,8 @@ proc inquire-diff {} {
     }
   
     # Parses output using a "RegExp 'recognizer'" to accomodate OTHER engines
-    # which would produce (most likely) distinctly different syntactic forms
-    #   N.B> DO NOT simplify this into a "switch -regexp"... (TCL bug!)
+    # which would (most likely) produce distinctly different syntactic forms
+    #   N.B> DO NOT simplify this into a "switch -regexp"... (--> TCL bug!)
     #   Somehow "switch" would PREVENT the $xtractFNre RE from matching
     foreach line [split $dOUT "\n"] {
         switch -glob -- $line {
@@ -2848,7 +2949,31 @@ proc inquire-diff {} {
                                                             [lindex $fpath 1]]]
             set finfo(lbl,[incr cnt]) [shortNm [set finfo(pth,$cnt) \
                                                             [lindex $fpath 2]]]
+        }
+        {diff --git *} {
+        # GIT Diff bears a marked resemblance to what "Diff -r" produces, but
+        # also MANGLES the filenames slightly. But the BIGGEST pain is it wont
+        # honor attempts to EXCLUDE files by name (Claims it can via ":!file",
+        # but doesnt WORK, at least NOT in a NON-repo environment)!
+            set fpath [regexp -inline -- $xtractFNre $line]
+            
+            # Need to carefully REMOVE the ficticious A/B naming prefixes
+            foreach {n f} "1 [lindex $fpath 1] 3 [lindex $fpath 3] 0" {
+                if {[string match {[ab]/.} $f} {
+                    lset fpath $n [string range $f 2 end]
+                } elseif {[string match {[ab]/} $f} {
+                    lset fpath $n [string range $f 1 end]
+                } { break }
             }
+
+            # Can only acccept BOTH if ABOVE loop properly processed EACH
+            if {!$n} {
+                set finfo(lbl,[incr cnt]) [shortNm [set finfo(pth,$cnt) \
+                                          [lindex $fpath 1][lindex $fpath 2]]]
+                set finfo(lbl,[incr cnt]) [shortNm [set finfo(pth,$cnt) \
+                                          [lindex $fpath 3][lindex $fpath 2]]]
+            }
+        }
         {diff *} {
         # GNU Diff -r output syntax (of NON-BINARY files): WITHOUT '-q' option:
         #   (data parrots the ORIGINAL $cmd except w/ SPECIFIC filenames)
@@ -2866,7 +2991,7 @@ proc inquire-diff {} {
                                           [lindex $fpath 1][lindex $fpath 2]]]
             set finfo(lbl,[incr cnt]) [shortNm [set finfo(pth,$cnt) \
                                           [lindex $fpath 3][lindex $fpath 2]]]
-            }
+        }
         default { continue }
         }
     }
@@ -3509,17 +3634,19 @@ proc show-popupMenu {X Y} {
 
         # Ensure w(acTxWdg) is proper for USE by above entry
         if {[string match {.client.left.*} $win]} {
-            $w(popupMenu) configure -title "File 1"
             set w(mPopW) [set w(acTxWdg) $w(LeftText)]
         } else {
-            $w(popupMenu) configure -title "File 2"
             set w(mPopW) [set w(acTxWdg) $w(RightText)]
         }
     } { set w(mPopW) $win
-        # Turn this OFF in case we are NOT over the Text (or other L/R) windows
+        # Turn this OFF when we are NOT over the Text (or other L/R) windows
         #   (Re: no way to know which SIDE it would apply to)
         $w(popupMenu) entryconfigure "Edit*" -state disabled
     }
+
+    # Cant find what doesnt exist...
+    $w(popupMenu) entryconfigure "Find Near*" -state \
+                                    [expr {$g(count) ? "normal" : "disabled"}]
 
     # Only allow clipboard copy if the primary selection is ours to begin with
     # AND is still PRESENTLY selected (as opposed to being FORMERLY selected)
@@ -4043,7 +4170,7 @@ proc build-client {} {
     # Besides binding the virtual event, we need to KNOW which TK is running,
     # PLUS a datum per widget (empty) ALL FOR exclusive use in a Pre-TK8.6.5
     # EMULATION designed to DRIVE that same binding!
-    set w(TK865) [package vsatisfies $tk_patchLevel 8.6.5]
+    set w(TK865) [package vsatisfies $tk_patchLevel 8.6.5-]
     lassign {} w(SYNCbusy$w(LeftText))  w(SYNCbusy$w(RightText)) 
     bind $w(LeftText)  <<WidgetViewSync>> { %W SYNCnow %d }
     bind $w(RightText) <<WidgetViewSync>> { %W SYNCnow %d }
@@ -4189,7 +4316,7 @@ set textROfcn {
                 Dbg {\tSYNCnow FIRING as ($w(SYNCnow))} $D {}
 
                 # FORCE the "alignment" scroll (at wherever we ARE just now)
-                #   This is actually a SAFE scroll because we are satifying a
+                #   This is actually a SAFE scroll because we are satisfying a
                 #   RQST that JUST THIS MOMENT showed as READY. Thus it WILL BE
                 #   READY when being processed, and CANT raise a RQST itself.
                 #     - INCLUDING its possible syncscroll partner.
@@ -4533,25 +4660,28 @@ proc LCSvbc {ops
     lassign "[expr $of1+$ln1] [expr $of2+$ln2] 0    16   8    4    2" \
                     M1              M2         best Cign Wign Wcnt Wtab
 
-    # Basis of loops is to proceed similar to what a "strstr(haystack,needle)" would,
-    # but looking for ANY/EVERY POSSIBLE SUBSTRING within both strings to "match",
-    # PLUS the rules for matching are OPTIONALLY more semantic than PURELY "identical".
+    # Basis of loops is to proceed similar to that of "strstr(haystack,needle)",
+    # but looking for ANY/EVERY POSSIBLE SUBSTR within both strings to "match",
+    # PLUS the rules for matching are OPTIONALLY more semantic than "identical".
     #	Loop structure: 1st steps through s1 (once); 2nd thru s2 (repetitively);
-    #                   3rd simply "matches" next avail char (or ALLOWED meta-group)
-    #        'Continue's indicate EXTENDING the current match; 'break' says we can't
-    #        Outer 2 loops abort when remaining bytes are incapable of a NEW 'best'
+    #                   3rd simply "matches" next avail char (or meta-group)
+    #        'Continue's indicate EXTENDING the current match; 'break' is can't.
+    #        Outer 2 loops abort when remaining bytes incapable of a NEW 'best'
     #        'SkpN's REMOVE one entire MATCH-element PREFIX (often 1 char)
-    for {lassign "$of1 $of1" S1 E1}    {$E1 < ($M1-($ln2<$best ? $best-$ln2:0))} {
-                                    set E1 [incr S1 [expr ($skp1 ?$skp1:1)]]}      {
+    for {lassign "$of1 $of1" S1 E1} {
+            $E1 < ($M1-($ln2<$best ? $best-$ln2:0))} {
+                    set E1 [incr S1 [expr ($skp1 ?$skp1:1)]]} {
 
-        for {lassign "$of2 $of2 0" S2 E2 skp1}  {$E2 < ($M2-($ln2<$best ? 0:$best))} {
-                                    set E2 [incr S2 [expr ($skp2 ?$skp2:1)]]}      {
+        for {lassign "$of2 $of2 0" S2 E2 skp1}  {
+                $E2 < ($M2-($ln2<$best ? 0:$best))} {
+                    set E2 [incr S2 [expr ($skp2 ?$skp2:1)]]} {
 
-            for {lassign "$S1 0" E1 skp2}       {$E1 < $M1 && $E2 < $M2} {
-                                    set skp2 [expr ($skp2 ? $skp2 : $E2-$S2)];
-                                    set skp1 [expr ($skp1 ? $skp1 : $E1-$S1)]}  {
+            for {lassign "$S1 0" E1 skp2}  {
+                    $E1 < $M1 && $E2 < $M2} {
+                                  set skp2 [expr ($skp2 ? $skp2 : $E2-$S2)] 
+                                  set skp1 [expr ($skp1 ? $skp1 : $E1-$S1)]}  {
 
-                # We build a LCS one matched ITEM (mostly a single char) at a
+                # We build a LCS one matched ITEM (often a single char) at a
                 # time, *BUT* Tcl is NOT very adept at "aggregate expressions"
                 # - so we PRE-DERIVED certain key values needed. Go GRAB them
                 # (as SPARINGLY as possible), starting w/actual CHARs + if its
@@ -4560,9 +4690,29 @@ proc LCSvbc {ops
                 set C1 [string index $s1 $E1] ; set C1sp [lindex $SP1 $E1]
                 set C2 [string index $s2 $E2] ; set C2sp [lindex $SP2 $E2]
 
-                # WhtSpc    (INSIGNIFICANT - simply the SAME ITEM)  #######
-                #   Identical
-                    if {"$C1" == "$C2"} { incr E1; incr E2; continue
+                # WhtSpc    (INSIGNIFICANT or NON-EXISTENT)  #######
+                #   aka - Identical matching and/or
+                #       Capitalization      meaningless (diffopt: -i) #####
+                if {($C1sp>0 && $C2sp>0) || !($ops&14)} {
+                    for {set i 0} {$E1<$M1 && $E2<$M2 &&
+                        ("$C1"=="$C2" || ($ops&$Cign && [string tolower "$C1"]
+                                     == [string tolower "$C2"]))} { incr i } {
+                            set C1 [string index $s1 [incr E1]]
+                            set C1sp [lindex $SP1 $E1]
+                            set C2 [string index $s2 [incr E2]]
+                            set C2sp [lindex $SP2 $E2]
+                     }
+                     # CONTINUE presuming we collect ANTHING contiguously...
+                     if {$i} {
+                         # When WhtSpc suppression is active but STOPS ON one,
+                         # 'backing-up' 1 position (IFF WAS a WhtSpc MATCH)
+                         # makes NEXT CYCLE simpler to parse AFTER we continue.
+                        if {$E1<$M1 && $E2<$M2 && ($ops&14)
+                        &&  (($C1sp<0) ^ ($C2sp<0)) && [lindex $SP1 $E1-1]<0} {
+                            incr E1 -1; incr E2 -1
+                        }
+                        continue
+                     }
 
                 # WhtSpc                                    ###############
                 #       totally             meaningless (diffopt: -w) -OR-
@@ -4588,41 +4738,21 @@ proc LCSvbc {ops
                     if {[lindex $SP1 $j] == [lindex $SP2 $k]} {
                         incr E1 $j ; incr E2 $k ; continue }
 
-            #   #       any @EOL            meaningless (diffopt: -Z) #####
-            #   X elseif {$ops&$Weol && (($C1sp<0) || ($C2sp<0))} {
-            # S ^   # Gotta PROBE where THIS run of WhtSpc ends...
-            # t ^   #   "i" drives "j" and "k" toward AT MOST the endpoint of
-            # u ^   #   each string; however "j" or "k" CAN stop EARLY upon
-            # p ^   #   reaching a NON-WhtSpc position: IF NEITHER stopped at
-            # i ^   #   its REAL 'EOL', it is NOT a MATCH
-            # d ^   for {lassign "0 0 0" i j k} {($i==$j || $i==$k)} {incr i} {
-            #   ^       if {($E1+$j < $M1)
-            # T ^       &&  [string is space [string index $s1 $E1+$j]]
-            # C ^       &&  ($E1+[incr j] == $M1eol)}             incr  E1 $j;
-            # L ^
-            #   ^       if {($E2+$k < $M2)
-            # P ^       &&  [string is space [string index $s2 $E2+$k]]
-            # a ^       &&  ($E2+[incr k] == $M2eol)}             incr  E2 $k;
-            # r ^   }
-            # s ^   if {$E1 == $M1eol || $E2 == $M2eol} { continue }
-            # e }
-                #       Capitalization      meaningless (diffopt: -i) #####
-                } elseif {($ops&$Cign) && $C1sp>0 && $C2sp>0
-                      && [string tolower "$C1"] == [string tolower "$C2"]} {
-                        incr E1; incr E2; continue;
+                #       any @EOL            meaningless (diffopt: -Z) #####
+                #                           (PRE-handled at initialization)
                 }
                 break;  # <<==--    ITEM did  *N O T*  Match ##############
             }
 
-            # Record best seen (based on length of consumed bytes from BOTH strings)
+            # Record best seen (based on len of consumed bytes from BOTH strs)
             #   (position values noted are ABSOLUTE within each ORIGINAL string
-            #    representing the byte where marking turns ON and subsequently OFF)
+            #    representing the byte where marking turns ON and then, OFF)
             if {[set i [expr $E1-$S1]] + [set j [expr $E2-$S2]] > $best} {
                 set LcsE1 [expr [set LcsB1 $S1] + $i]
                 set LcsE2 [expr [set LcsB2 $S2] + $j]
                 set best  [expr [set skp1  $i]  + $j]
-                # Altering skp1 AVOIDS time spent on attempts that ONLY(?) fail...
-                break   ;# ... BREAKING here allows that to take effect immediately
+                # Altering skp1 AVOIDS time spent on ONLY(?) fail attempts...
+                break   ;# ... BREAKING here allows that to take effect NOW
             }
         }
     }
@@ -4633,17 +4763,18 @@ proc LCSvbc {ops
 # Recursive Ratcliff/Obershelp DFS walk mechanism
 #   N.B> UNLIKE 'LCSvbc' above, these are THE REAL (1<->2) based variable sets
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-proc ROwalk {hID pairID ops   s1 off1 len1 SP1 M1eol   s2 off2 len2 SP2 M2eol} {
+proc ROwalk {hID pairID ops  s1 off1 len1 SP1 M1eol  s2 off2 len2 SP2 M2eol}  {
     global g
 
     # Bgn[12]/End[12] demarcate where LCS was FOUND in EACH string
     #   (N.B> due to semantic 'ops', they might NOT be a common length)
     lassign {0 0 0 0 0} Bgn1 End1 Bgn2 End2 cnt
 
-    if {$len1 && $len2} {
-        # LCS Alg expects the LONGER string as its first argset, eg. XXX(haystack, needle)
-        #      (the operation while not (strictly) commutative, *IS* deterministic
-        #      and WILL tend to execute more quickly when configured in ths arrangement)
+    if {$len1>0 && $len2>0} {
+        # LCS Alg wants the LONGER string as its first argset,
+        #           (eg. XXX(haystack, needle)
+        #      (while not (strictly) commutative, it *IS* deterministic
+        #      and WILL tend to execute quicker when configured this way)
         if {$len2 < $len1} {
             set cnt [LCSvbc $ops $s1 $off1 $len1 $SP1 $M1eol Bgn1 End1 \
                                  $s2 $off2 $len2 $SP2 $M2eol Bgn2 End2]
@@ -4653,7 +4784,7 @@ proc ROwalk {hID pairID ops   s1 off1 len1 SP1 M1eol   s2 off2 len2 SP2 M2eol} {
         }
 
         # A ZERO indicates no 'LCS' AT ALL between s1/s2; otherise do the left
-        # AND right substring-pairings lying to EACH side of the LCS (if present)
+        # AND right substring-pairs lying to EACH side of the LCS (if present)
         if {$cnt > 0} {
             if {$Bgn1 > $off1 || $Bgn2 > $off2} {
                 # left
@@ -4671,13 +4802,13 @@ proc ROwalk {hID pairID ops   s1 off1 len1 SP1 M1eol   s2 off2 len2 SP2 M2eol} {
         }
     }
 
-    # When one or both strings do not subdivide, the REMAINDER is marked as 'different'
+    # When one or both strings do not subdivide, the REMAINDER becomes marked
     # Yet option "-w"(8) can STILL affect WHICH chars to NOT mark
 
     # RIGHT-side markings:
-    if {$len2 && (!$len1 || !$cnt)} {
-        # Continue processing further for "-w" (when reqd)
-        if {($ops & 8) && ($len2 >= 0)} {
+    if {$len2>0 && ($len1<1 || !$cnt)} {
+        # Continue processing further for "-w" (aka Wign)
+        if {($ops & 8)} {
             for {incr len2 $off2} {[set mark $off2] < $len2} {} {
                 if {[string is space [string index $s2 $off2]]} {
                     incr off2 ; continue
@@ -4687,13 +4818,14 @@ proc ROwalk {hID pairID ops   s1 off1 len1 SP1 M1eol   s2 off2 len2 SP2 M2eol} {
                         incr off2}
                 lappend g(inline,$hID) r $pairID $mark $off2
             }
-        } elseif {$len2} {lappend g(inline,$hID) r $pairID $off2 [expr $off2+$len2]}
+        } elseif {$len2} {lappend g(inline,$hID) r \
+                                              $pairID $off2 [expr $off2+$len2]}
     }
 
     # LEFT-side markings:
-    if {$len1 && (!$len2 || !$cnt)} {
-        # Continue processing further for "-w" (when reqd)
-        if {($ops & 8) && ($len1 >= 0)} {
+    if {$len1>0 && ($len2<1 || !$cnt)} {
+        # Continue processing further for "-w" (aka Wign)
+        if {($ops & 8)} {
             for {incr len1 $off1} {[set mark $off1] < $len1} {} {
                 if {[string is space [string index $s1 $off1]]} {
                     incr off1 ; continue
@@ -4702,7 +4834,8 @@ proc ROwalk {hID pairID ops   s1 off1 len1 SP1 M1eol   s2 off2 len2 SP2 M2eol} {
                     ![string is space [string index $s1 $off1]]}    {incr off1}
                 lappend g(inline,$hID) l $pairID $mark $off1
             }
-        } elseif {$len1} {lappend g(inline,$hID) l $pairID $off1 [expr $off1+$len1]}
+        } elseif {$len1} {lappend g(inline,$hID) l \
+                                              $pairID $off1 [expr $off1+$len1]}
     }
 
     return $cnt
@@ -4990,12 +5123,13 @@ proc build-menus {} {
     #   Items enclosed in [ ]        Cm: command
     #      are optional as           Ac: accelerator-link
     #         depicted               Vr: state-variable
+    #                                Ov: ON-value
     #                                Tp: Tooltip text
     # # #   #   #   #   #   #   #   #   #   #   #   # # #
     #   .abc    separator    {}  {                      }
-    #   .def    cascade      Lb  { Ul  Mu          [Tp] }
-    #   .mno    command      Lb  { Ul  Cm  [Ac]    [Tp] }
-    #   .xyz    checkbutton  Lb  { Ul [Cm] [Ac] Vr  Tp  }
+    #   .def    cascade      Lb  { Ul  Mu            [Tp] }
+    #   .mno    command      Lb  { Ul  Cm  [Ac]      [Tp] }
+    #   .xyz    checkbutton  Lb  { Ul [Cm] [Ac] Vr Ov Tp  }
     foreach {Mu Ty Lb Ul} [subst -nocommands {
     $pM comm "First Diff"     {0 {move first}      navFrst}
     $pM comm "Previous Diff"  {0 {move -1}         navPrev}
@@ -5056,38 +5190,38 @@ proc build-menus {} {
                                         "Pop up a window to customize $g(name)"}
 
     $mB casc "View"  {0 $vM}
-      $vM checkb "Ignore White Spaces" \
-                                    {7 {reCalcD ignblanks} {} opts(ignoreblanks)
-                            "If set, applys whitespace options during the Diff"}
-      $vM checkb "Ignore Blank Lines" \
-                                  {7 {reCalcD ignEmptyLn} {} opts(ignoreEmptyLn)
-                             "If set, suppress empty lines from causing a Diff"}
-      $vM checkb "Ignore RE-matched Lines" \
-                               {7 {reCalcD ignoreRegexLn} {} opts(ignoreRegexLn)
+      $vM checkb "Utilize Suppressions" {0
+                                  {reCalcD ignSuprs RevAlgn} {} opts(ignSuprs) 2
+                           "If set, applys suppression options during the Diff"}
+      $vM checkb "Ignore Blank Lines" {7
+                        {reCalcD ignoreEmptyLn RevAlgn} {} opts(ignoreEmptyLn) 8
+                            "If set, suppress empty lines from becoming a Diff"}
+      $vM checkb "Ignore RE-matched Lines" {7
+                        {reCalcD ignoreRegexLn RevAlgn} {} opts(ignoreRegexLn) 4
              "If set, suppress Diffs from lines matching Regular Expression(s)"}
       $vM separator {} {}
-      $vM checkb "Show Line Numbers" {12 {do-show-Info showln} {} opts(showln)
+      $vM checkb "Show Line Numbers"  {3 {do-show-Info showln} {} opts(showln) 1
                       "If set, show line numbers beside each line of each file"}
-      $vM checkb "Show Change Bars" {12 {do-show-Info showcbs} {} opts(showcbs)
+      $vM checkb "Show Change Bars" {6 {do-show-Info showcbs} {} opts(showcbs) 1
                  "If set, show the changebar column for each line of each file"}
-      $vM checkb "Show Diff Map" {5 {do-show-map} {} opts(showmap)
+      $vM checkb "Show Diff Map" {10 {do-show-map} {} opts(showmap) 1
         "If set, display the graphical 'Diff Map' in the center of the display"}
       $vM checkb "Auto Center" \
-                    {0 {if {\$opts(autocenter)} {centerCDR}} {} opts(autocenter)
+                  {0 {if {\$opts(autocenter)} {centerCDR}} {} opts(autocenter) 1
          "If set, moving to another diff region centers the diff on the screen"}
-      $vM checkb "Auto Select" {1 {} {} opts(autoselect)
+      $vM checkb "Auto Select" {6 {} {} opts(autoselect) 1
         "If set, automatically selects the nearest diff region while scrolling"}
       $vM checkb "Show Line Comparison Window" \
-                                    {11 {do-show-lineview} {} opts(showlineview)
+                                  {21 {do-show-lineview} {} opts(showlineview) 1
                      "If set, display the window with byte-by-byte differences"}
       $vM checkb "Show Inline Comparison (byte)" \
-                           {24 {do-show-inline showinline1} {} opts(showinline1)
+                         {26 {do-show-inline showinline1} {} opts(showinline1) 1
                               "If set, display inline byte-by-byte differences"}
       $vM checkb "Show Inline Comparison (recursive)" \
-                           {24 {do-show-inline showinline2} {} opts(showinline2)
+                         {31 {do-show-inline showinline2} {} opts(showinline2) 1
                            "If set, display inline recursive based differences"}
       $vM separator {} {}
-      $vM checkb "Synchronize Scrollbars" {0 {} {} opts(syncscroll)
+      $vM checkb "Synchronize Scrollbars" {0 {} {} opts(syncscroll) 1
                      "If set, scrolling either window will scroll both windows"}
       $vM separator {} {}
       $vM comm "First Diff" {0 {move first} navFrst
@@ -5107,7 +5241,7 @@ proc build-menus {} {
                          "Clear the Bookmark for the current difference region"}
 
     $mB cascade "Merge" {0 $gM}
-      $gM checkb "Show Merge Window" {9 {do-show-merge 1} {} g(showmerge)
+      $gM checkb "Show Merge Window" {9 {do-show-merge 1} {} g(showmerge) 1
                            "Pops up a window showing the current merge results"}
       $gM comm "Write Merge File..." {6 {merge-write-file} {}
              "Write the merge file to disk AFTER confirming the filename first"}
@@ -5122,9 +5256,9 @@ proc build-menus {} {
       $hM separator {} {}
       $hM comm "About $g(name)" {0 {about-TkD} {}
                                       "Show information about this application"}
-      $hM comm "About Wish" {6 {about_wish} {}
+      $hM comm "About Wish" {6 {about-wish} {}
                          "Show information about the TK Windowing-Shell (Wish)"}
-      $hM comm "About Diff" {6 {about_diff} {}
+      $hM comm "About Diff" {6 {about-diff} {}
                                        "Show information about the diff-engine"}
     }] {
         # THIS is the MENU factory (which processes the above list)
@@ -5132,19 +5266,19 @@ proc build-menus {} {
         # LATER - all we do NOW is DEFINE to which menuItems they should GO
         switch -glob $Ty {
         ca* { lassign $Ul Ul mU Tp
-              $Mu add cascade -label $Lb -underline $Ul -menu [menu $mU]
-              if {$Tp!={}} { set g(tooltip,$Lb) "$Tp" }
+            $Mu add cascade -label $Lb -underline $Ul -menu [menu $mU]
+            if {$Tp!={}} { set g(tooltip,$Lb) "$Tp" }
         }
         co* { lassign $Ul Ul Cm Ac Tp
-              $Mu add command -label $Lb -underline $Ul -command $Cm
-              if {$Ac!={}} { lappend w(Accel,$Ac) $Mu [$Mu index end] }
-              if {$Tp!={}} { set g(tooltip,$Lb) "$Tp" }
+            $Mu add command -label $Lb -underline $Ul -command $Cm
+            if {$Ac!={}} { lappend w(Accel,$Ac) $Mu [$Mu index end] }
+            if {$Tp!={}} { set g(tooltip,$Lb) "$Tp" }
         }
-        ch* { lassign $Ul Ul Cm Ac Vr Tp
-              $Mu add checkbutton -label $Lb -underline $Ul -variable $Vr
-              if {$Ac!={}} { lappend w(Accel,$Ac) $Mu [$Mu index end] }
-              if {$Cm!={}} { $Mu entryconfig [$Mu index end] -command $Cm }
-              set g(tooltip,$Lb) "$Tp"
+        ch* { lassign $Ul Ul Cm Ac Vr Ov Tp
+            $Mu add checkbutton -label $Lb -underline $Ul -vari $Vr -onval $Ov
+            if {$Ac!={}} { lappend w(Accel,$Ac) $Mu [$Mu index end] }
+            if {$Cm!={}} { $Mu entryconfig [$Mu index end] -command $Cm }
+            set g(tooltip,$Lb) "$Tp"
         }
         s*  { $Mu add separator }
         }
@@ -5155,6 +5289,10 @@ proc build-menus {} {
     # Alternate tooltip (for when TkDiff REMOVES the "..." from the label)
     set "g(tooltip,Write Merge File)" \
             "Write the merge file to disk USING the command line specified name"
+
+    # It is not readily apparent that the first 3 View Menu items will FORCE
+    # a Diff to occur - try to (subtley) warn the user of this with a HILITE
+    verify alertD pushtomenu $vM
 
     # And this simply ISN'T a user-modifiable binding (as expected by factory)               
     $pM entryconfigure "Find Near*" -accelerator "Dbl-Click"
@@ -5234,7 +5372,7 @@ proc build-toolbar {} {
                                      {"Search for a string within either file"}
         firstCDR "First"      34 {move first}     {"Move to First Diff region"}
         lastCDR  "Last"       34 {move last}       {"Move to Last Diff region"}
-        prevCDR  "Prev"       34 {move -1}   {"Move to Preceeding Diff region"}
+        prevCDR  "Prev"       34 {move -1}    {"Move to Preceding Diff region"}
         nextCDR  "Next"       34 {move  1}    {"Move to Following Diff region"}
         ctrCDR   "Center"     46 {centerCDR}     {"Center Current Diff region"}
         bkmSet   "Set"        26 {bkmark creat}           {"Bookmark this CDR"}
@@ -5425,6 +5563,8 @@ proc build-status {} {
 
     set w(statusLabel) $w(status).label
     set w(statusCurrent) $w(status).current
+    set w(statusMrgL) $w(status).mrgL
+    set w(statusMrgR) $w(status).mrgR
 
     # MacOS has a resize handle in the bottom right which will sit on top of
     # whatever is placed there. So, we add a little bit of whitespace there.
@@ -5433,11 +5573,19 @@ proc build-status {} {
 
     label $w(statusCurrent) -textvariable g(statusCurrent) -anchor e \
       -width 14 -borderwidth 1 -relief sunken -padx 4 -pady 2
+    label $w(statusMrgL) -textvariable g(statusMrgL) -anchor e \
+                -borderwidth 1 -compound right -image mrgC1Img -relief sunken
+    label $w(statusMrgR) -textvariable g(statusMrgR) -anchor e \
+                -borderwidth 1 -compound left  -image mrgC2Img -relief sunken
+
     label $w(statusLabel) -textvariable g(statusInfo) -anchor w -width 1 \
       -borderwidth 1 -relief sunken -pady 2
     pack $w(status).blank -side right -fill y
 
     pack $w(statusCurrent) -side right -fill y -expand n
+    pack $w(statusMrgR) -side right -fill y -expand n
+    pack $w(statusMrgL) -side right -fill y -expand n
+
     pack $w(statusLabel) -side left -fill both -expand y
 }
 
@@ -5611,10 +5759,8 @@ proc setBinds {args} {
 
         if {[string match {.client.*} $btag]} {
             # Skip client elements we dont care about:
-            #       ancFile, grip, scrollbars, labels, frames)
+            #       ancFile, grip, frames
             if {[string match {.client.[ag]*} $btag]
-            ||  [string match {.client.*sb}    $btag]
-            ||  [string match {.client.*label} $btag]
             || [winfo class $btag]=="Frame"} { continue }
 
             if {[string match {*.info} $btag]} {
@@ -5715,8 +5861,19 @@ proc setBinds {args} {
                     }
                 }
 
-            # That leaves the DiffMap ...
-            } { bind $btag <Double-1>  {moveNearest %W  xy   %x %y ; break} }
+            # That leaves the DiffMap+Labels, (and NOT-clickable ScrlBars) ...
+            } elseif {![string match {.client.*sb}    $btag]} {
+                # ScrlBars shouldnt Dbl-click at ALL (because they will MOVE), 
+                # but Labels will simulate the click ASIF it was IN Textwin
+                #   (because labels dont have '@x,y' addressable lines)
+                if {[string match {.client.*label}    $btag]} {
+                    set companion [string replace $btag end-4 end ".text"]
+                    bind $btag <Double-1> \
+                        [subst {moveNearest $companion    xy  %x %y ; break}]
+                # We let DiffMap move, because it treats the XY as a POSITION
+                # within the WHOLE of the content, not an analog of the Textpos
+                } {bind $btag <Double-1>  {moveNearest %W xy  %x %y ; break}}
+            }
 
             #   ...(plus the fall-thru of everything above) which ALL needs
             # the binding to provide the Popup menu (so its just EVERYWHERE)
@@ -6008,40 +6165,37 @@ proc customize {} {
         #   N.B> Unusual 'takefocus' prevents the Behavior tab from letting
         #   the keyboard Tab-traverse INTO these buttons until AFTER a local
         #   grab is no longer in-force ON that particular tab-page!
-        frame $w(prefs).buttons -bd 0
-        button $w(prefs).buttons.dismiss -width 8 -text "Dismiss" \
+        frame $w(prefs).btns -bd 0
+        button $w(prefs).btns.dismiss -width 8 -text "Dismiss" \
                                    -command {prefdismiss $w(prefs)}
-        button $w(prefs).buttons.apply   -width 8 -text "Apply"   \
-                       -command {prefapply $w(prefs).buttons.apply}
-        button $w(prefs).buttons.save    -width 8 -text "Save"  \
-          -command {prefsave $w(prefs).buttons.save}               -takefocus \
+        button $w(prefs).btns.apply   -width 8 -text "Apply"   \
+                       -command {prefapply $w(prefs).btns.apply}
+        button $w(prefs).btns.save    -width 8 -text "Save"  \
+          -command {prefsave $w(prefs).btns.save} -takefocus \
                       {apply {wdg { return [expr {[grab current $wdg]=={}}] }}}
-        button $w(prefs).buttons.help    -width 8 -text "Help"  \
-          -command {help-prefs}                                    -takefocus \
+        button $w(prefs).btns.help    -width 8 -text "Help"  \
+          -command {help-prefs}                   -takefocus \
                       {apply {wdg { return [expr {[grab current $wdg]=={}}] }}}
 
-        pack $w(prefs).buttons         -side bottom -fill x
-        pack $w(prefs).buttons.dismiss -side right -padx 10 -pady 5
-        pack $w(prefs).buttons.help    -side right -padx 10 -pady 5
-        pack $w(prefs).buttons.save    -side right -padx 1  -pady 5
-        pack $w(prefs).buttons.apply   -side right -padx 1  -pady 5
+        pack $w(prefs).btns         -side bottom -fill x
+        pack $w(prefs).btns.dismiss -side right -padx 10 -pady 5
+        pack $w(prefs).btns.help    -side right -padx 10 -pady 5
+        pack $w(prefs).btns.save    -side right -padx 1  -pady 5
+        pack $w(prefs).btns.apply   -side right -padx 1  -pady 5
 
         # a series of radiobuttons to act as a poor mans notebook tab
         frame $w(prefs).notebook -bd 0
         pack $w(prefs).notebook -side top -fill x -pady 4
-        set pagelist {}
 
         # The relief makes these work, so we don't need to use the selcolor
         # Radiobuttons without indicators look rather sucky on MacOSX,
         # so we'll tweak the style for that platform
         #   These are also subject to non-Tab-traversal when grab is active
         set indicatoron [expr {$w(wSys) == "aqua"}]
-        foreach page {General Display Behavior Appearance} {
+        foreach page {General Display Behavior Appearance Engine} {
             set frame $w(prefs).f$page
-            lappend pagelist $frame
             set rb $w(prefs).notebook.f$page
-            radiobutton $rb -command "setPrefPage $frame" \
-              -selectcolor $w(background) \
+            radiobutton $rb -command "setPrefPage $frame" -selectcolor $w(bgnd)\
               -variable g(prefPage) -value $frame -height 2 -text $page \
               -indicatoron $indicatoron -borderwidth 1 -takefocus \
                       {apply {wdg { return [expr {[grab current $wdg]=={}}] }}}
@@ -6051,25 +6205,45 @@ proc customize {} {
             frame $frame -bd 2 -relief groove -width 400 -height 300
         }
 
-        # this is an option that we support internally, but don't give
-        # the user a way to directly edit (right now, anyway). But we
-        # need to make sure tmpopts knows about it
+        # This Pref is supportted internally,
+        # yet don't give the user a way to directly edit (right now, anyway).
+        # Still, we need to ensure tmpopts knows about it
         set tmpopts(customCode) $opts(customCode)
 
         # General
         # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
         set frame $w(prefs).fGeneral
         set row 0
-        foreach key {diffcmd fRecurs xcludeFils ignoreblanksopt tmpdir editor
-                                        ignoreRegexLnopt filetypes geometry } {
+        foreach key {diffcmd xcludeFils tmpdir editor ignoreRegexLnopt
+                                                        filetypes geometry } {
             label $frame.l$row -text "$pref($key): " -anchor w
             set tmpopts($key) $opts($key)
             if {$key == "ignoreRegexLnopt" || $key == "filetypes"} {
-                ::combobox::combobox $frame.e$row -width 50 \
-                            -command "editLstPref $key" -listvar tmpopts($key)
+                ::combobox::combobox $frame.e$row -listvar tmpopts($key) \
+                            -width 50 -command "editLstPref $key"
+            } elseif {$key=="diffcmd"} {
+                entry [set W $frame.e$row] -width 50 -bd 2 -relief sunken     \
+                                  -textvariable tmpopts($key) -state readonly \
+                                  -validate key -vcmd "verify alertD $key $W 1"
+                # Added to FIND key->widget (when needed later)
+                # N.B> 'egnOpt' is meaningless but simplifies parsing later
+                dict set w(prefD) $key "0 egnOpt $W {}"
+
+                # We also want a SPECIAL binding for when the mouse HOVERS to
+                # show us the CURRENT value, in those circumstances where it
+                # is warning of being overwritten....
+                bind $W <Enter> "if {\$tmpopts($key)!=\$opts($key)} {\
+                           show-status \"CURRENT Diff command: \$opts($key)\"}"
+                bind $W <Leave> "if {\$tmpopts($key)!=\$opts($key)} {\
+                                                     show-status {} }"
             } else {
                 entry $frame.e$row -width 50 -bd 2 -relief sunken \
-                    -textvariable tmpopts($key)
+                                                  -textvariable tmpopts($key)
+            }
+
+            # Declare "-state" on some of these as slaved to other controls
+            if {[string match {*opt} $key]} {
+                linkState $frame.e$row tmpopts([string range $key 0 end-3])
             }
 
             grid $frame.l$row -row $row -column 0 -sticky w -padx 5 -pady 2
@@ -6091,7 +6265,7 @@ proc customize {} {
         #       an 'x' means an empty column; a '-' means an empty row
         # (Note: rows must be fully filled - even if that means a trailing 'x')
         set col 0
-        foreach key { ignoreblanks autocenter - ignoreEmptyLn autoselect -
+        foreach key { ignSuprs autocenter - ignoreEmptyLn autoselect -
                 ignoreRegexLn autoSrch syncscroll scmPrefer - predomMrg x} {
 
             if {$key != "x"} {
@@ -6130,23 +6304,33 @@ proc customize {} {
                              pack $f.r$val -side left
                         }
                     } else {
-                        checkbutton $frame.c${row}$col -indicatoron true  \
-                               -text "$pref($key)" -onvalue 1 -offvalue 0 \
-                                                    -variable tmpopts($key)
+                        set W [checkbutton $frame.c${row}$col -indicatoron 1  \
+                                   -text "$pref($key)" -variable tmpopts($key)]
+
+                        # Each 'ign(ore...)' toggle CAN cause a RedoDiff case
+                        # Alert via 'inform' color hiliting to that widget.
+                        #   Also re-encode the ONvalues as NON-OVERLAPPED bits
+                        #   attaching the check-cmd & record in the dictionary
+                        # N.B> weird 'switch' VALUE-test means DONT DO w/B==0
+                        #     (B==1 is RESERVED(key==diffcmd) not handled here)
+                        if {[switch -glob $key {
+                            ign*E*Ln { set B 8 }
+                            ign*R*Ln { set B 4 }
+                            ignS*    { set B 2 }
+                            default  { set B 0 }
+                        }]} { $W config -command "verify alertD $key $W $B"   \
+                                                                    -onvalue $B
+                              # Added to FIND key->widget (when needed later)
+                              # N.B> 'egnOpt' is meaningless but helps parsing
+                              dict set w(prefD) $key "0 egnOpt $W {}"
+                        }
                     }
-                    grid $frame.c${row}$col -row $row -column $col        \
-                                                          -sticky w -padx 5
+                    grid $frame.c${row}$col -row $row -column $col -sticky w  \
+                                                                        -padx 5
                 }
             }
             if {![set col [expr {$col ? 0 : 1}]]} { incr row }
         }
-
-        # add validation to enable/disable BOTH 'ignore(blanksopt/RegexLnopt)'
-        # then initialize them into agreement
-        trace add var tmpopts(ignoreblanks)  write "alignTrState $frame.e2"
-        trace add var tmpopts(ignoreRegexLn) write "alignTrState $frame.e6"
-        alignState $frame.e2 $tmpopts(ignoreblanks)
-        alignState $frame.e6 $tmpopts(ignoreRegexLn)
 
         # The bottom row and right col should stretch to take up any extra room
         grid columnconfigure $frame 0 -weight 0
@@ -6189,8 +6373,9 @@ proc customize {} {
         set key "tabstops"
         set tmpopts($key) $opts($key)
         label $frame.l$row -text "$pref($key):" -anchor w
-        entry $frame.e$row -textvariable tmpopts($key) -bd 2 -relief sunken \
-          -width 3
+        entry $frame.e$row -textvariable tmpopts($key) -width 3 \
+            -bd 2 -relief sunken -vcmd {verify integer %P %S} \
+                 -validate key -invcmd "verify revert %W $key %s"
         grid $frame.l$row -row $row -column 0 -sticky w -padx 5 -pady 2
         grid $frame.e$row -row $row -column 1 -sticky w -padx 5 -pady 2
 
@@ -6215,17 +6400,16 @@ proc customize {} {
                    # button 'active' bg shows color as contrasted w/Txt fg
                    set tmpopts($key) $opts($key)
                    set b $frame.b${row}$col
-                   button $b -text "$pref($key)" -command "clrpick $b $key"  \
-                                   -activeforeground [$w(LeftText) cget -fg] \
-                                   -activebackground $tmpopts($key)
+                   button $b -text "$pref($key)" -activebackgr $tmpopts($key) \
+                                    -activeforeground [$w(LeftText) cget -fg] \
+                       -command [expr {"$key"!="inform" ? "clrpick $b $key" : \
+                      "clrpick $b $key;verify alertD pushtomenu $w(viewMenu)"}]
+
                    grid $b -row $row -column $col -sticky ew -padx 5 -pady 2
                 }
             }
             if {![set col [expr {$col ? 0 : 1}]]} { incr row }
         }
-
-        # a tiny bit of validation, so user can only enter numbers for tabwidth
-        trace add var tmpopts(tabstops) write [list validate integer]
 
         # The bottom row and right col should stretch to take up any extra room
         grid columnconfigure $frame 0 -weight 0
@@ -6263,7 +6447,7 @@ proc customize {} {
                 } else {
                     set tmpopts($key) $opts($key)
                     if {$key=="fLMmax"} {
-                        scale $frame.c${row}${col} -orient horizontal -tick 0 \
+                        scale $frame.c${row}$col   -orient horizontal -tick 0 \
                                 -from 1 -to 25 -var tmpopts($key)             \
                                 -label $pref($key)                  -length 2i
                         # N.B> '-length' mitigates stupid label truncation!
@@ -6277,21 +6461,21 @@ proc customize {} {
                         # treat the value as a composition of ALL -
                         foreach {typ val} {
                                   Case 16 Blanks 8 #Blanks 4 @TabX 2 @EOL 1} {
-                             checkbutton $f.b$val -text $typ -indicatoron 1  \
-                                         -onval $val  -variable w($key$val)  \
-                                         -command "inlCombineState $key $val"
+                            checkbutton $f.b$val -text $typ -indicatoron 1    \
+                                         -onvalue $val  -variable w($key$val) \
+                            -command "set tmpopts($key) \[pickSuprs $key $val]"
                              set w($key$val) [expr {$tmpopts($key) & $val}]
                              pack $f.b$val -side left
                         }
-                    } {
-                        checkbutton $frame.c${row}${col} -indicatoron 1       \
+                    } else {
+                        checkbutton $frame.c${row}$col   -indicatoron 1       \
                                     -text "$pref($key)" -variable tmpopts($key)
                     }
 
                      # Manage each widget EXCEPT 'fancybuttons' on MacOS 'Aqua'
                     if {$key != "fancyButtons" || $w(wSys) != "aqua"} {
-                    grid $frame.c${row}$col -sticky w -padx 5                 \
-                                                        -row $row -column $col
+                        grid $frame.c${row}$col -row $row -column $col -padx 5\
+                                                                    -sticky w
                     }
                 }
             }
@@ -6363,12 +6547,183 @@ proc customize {} {
         set maxheight [max $maxheight [winfo reqheight $w(prefs)]]
         pack forget $frame
 
+
+        # Engine configuration
+        # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+        set frame $w(prefs).fEngine
+
+        set row 0
+        # Break page into two subframes for thw TWO engine commands we need
+        # Then insert an entrybox for each into their first row
+        #   We will then populate any additional options by looping over each
+        set    LF1 [labelframe $frame.lf1 -text $pref(egnCmd)]
+        set    LF2 [labelframe $frame.lf2 -text $pref(egnSrchCmd)]
+        entry $LF1.e$row -relief sunken -bd 2 -textvar tmpopts(egnCmd) \
+                         -validate key -vcmd "verify egnCfg $LF2 %P egnSrchCmd"
+        entry $LF2.e$row -relief sunken -bd 2 -textvar tmpopts(egnSrchCmd) \
+                         -validate key -vcmd "verify egnCfg $LF2 %P egnCmd"
+        grid  $LF1.e$row -row $row -column 1 -columnspan 2 -sticky ew
+        grid  $LF2.e$row -row $row -column 1 -columnspan 2 -sticky ew
+
+        # Option fields
+        # Note that the order of the list is used to determine the layout.
+        # So, if adding something to the list pay attention to what it affects.
+        #
+        # Remaining layout is a 2-col, row-major order (ie. cols vary fastest)
+        #       an 'x' means an empty column; a '-' means an empty row
+        # (Note: rows must be fully filled - even if that means a trailing 'x')
+
+        # (First 5 "egn*" Wdgs get a UNIQUE BIT-val 'onval' derived from $pwr2)
+        foreach LF "$LF1 $LF2" {pwr2 row col keys} {
+                             16 1 0 {- egnCase eopCase egnBlanks eopBlanks
+                                     egn#Blanks eop#Blanks egn@TabX eop@TabX
+                                     egn@EOL eop@EOL egnTabSiz eopTabSiz}
+                             16 1 0 {- egnSCase eopSCase egnSBlanks eopSBlanks
+                                     egnS#Blanks eopS#Blanks egnS@TabX eopS@TabX
+                                     egnS@EOL eopS@EOL egnSTabSiz eopSTabSiz
+                                     egnXcludFil eopXcludFil}} {
+            foreach key $keys  {
+                if {$key != "x"} {
+                    if {$key == "-"} {
+                        frame $LF.f${row} -bd 0 -height 4
+                        grid  $LF.f${row} -row $row -column 0 -columnspan 2 \
+                                                -padx 20 -pady 4 -sticky nsew
+                        set col 1 ;# forces NEXT col to zero and increments row
+                    } else {
+                        set tmpopts($key) $opts($key)
+                        # There are TWO SETS (Diff/Srch) of suppressions:
+                        # create a unique PREFIX (per set) to group their
+                        # values collectively
+                        #
+                        ## N.B> BUNCHES of structure in the KEY NAMES:  beware!
+                        if {[string match {???S*} $key]
+                        ||  [string match {???XcludFil} $key]} {
+                            set PfX "egnSOpt"}  {set PfX "egnOpt"}
+
+                        if {[string match {eop*} $key]} {
+                            # This gets weird with a 'hidden' 3rd col despite
+                            # the LAYOUT pretending there is only TWO
+                            #   (because we need a LABEL for the entry widget)
+                            set V [string match {*[SF]i[zl]} $key]
+                            label $LF.c${row}$col   -text "via cmd flag:"
+                            entry $LF.e${row}$col   -relief sunken    -bd 2   \
+                                    -vcmd "verify $PfX $LF.c${row}0 %P %S $V" \
+                                           -invcmd "verify revert %W $key %s" \
+                                           -validate key -textvar tmpopts($key)
+                            grid $LF.e${row}$col -row $row -column 2 -sticky ew
+
+                        } elseif {$pwr2} {
+                            # The FIRST 5 checkboxes have specific $pwr2 ONvals
+                            set W [checkbutton $LF.c${row}$col -indicatoron 1 \
+                                     -text $pref($key) -variable w($PfX$pwr2) \
+                               -onvalue $pwr2 -command "pickSuprs $PfX $pwr2" ]
+
+                            # Init widget var FIRST, afterward always REFLECT
+                            # the value OUTWARD back to the actual key setting
+                            set w($PfX$pwr2) $tmpopts($key)
+                            trace add var w($PfX$pwr2) write "apply {{k a i o}\
+                                         {set ::tmpopts(\$k) \$::w(\$i)}} $key"
+
+                            # Provide access to wdg AND var for later:
+                            #   BECAUSE w($PfX$pwr2) is whats TIED to widget!
+                            #
+                            # Also the 'egnOpt' set of widgets must watch for
+                            # ALERTS indicating "diffcmd" has been ALTERRED!
+                            if {$PfX=="egnOpt"} {
+                                $W config -command [concat [$W cget -command] \
+                                  ";set tmpopts(diffcmd) \[formOpts egnCmd];" \
+                                                "verify alertD $key $W $pwr2"]
+                                dict set w(prefD) $key "$pwr2 $PfX $W"
+                            }
+
+                            # Decrement PowerOf2 for nxt time: 16->8->4->2->1->0
+                            set pwr2 [expr {$pwr2/2}]
+
+                        } { set W [checkbutton $LF.c${row}$col -indicatoron 1 \
+                                     -text $pref($key) -variable tmpopts($key)]
+
+                            # Despite not being $pwr2-based, it STILL belongs
+                            # to its $PfX group, one of which needs more....
+                            if {$PfX=="egnOpt"} {
+                                $W config -command \
+                                    "set tmpopts(diffcmd) \[formOpts egnCmd] ;\
+                                                      verify alertD $key $W 0"
+
+                                # Provide access to wdg AND var for later:
+                                #   (bit==0 says use "$key" - NOT "$PfX")
+                                dict set w(prefD) $key "0 $PfX $W"
+                            }
+                        }
+
+                        # Add logical predecessor link (ie. UpTree) to items
+                        # that can be turned OFF (supports dynamic hiliting)
+                        if {$PfX=="egnOpt" && [string match {egn*} $key]} {
+                            dict lappend w(prefD) $key ignSuprs
+                        }
+
+                        grid $LF.c${row}$col -row $row -column $col -sticky w \
+                                                                    -padx {5 0}
+                    }
+                }
+                if {![set col [expr {$col ? 0 : 1}]]} { incr row }
+            }
+        }
+
+        # Collect ALL the keys, for which 'ignSuprs' was set as its UpTree link
+        # and append THEM onto the value for 'ignSuprs' (eg. DownTree links)
+        dict lappend w(prefD) "ignSuprs" \
+                         [dict keys [dict filter $w(prefD) value {* ignSuprs}]]
+
+        # Establish page layout compliance w/optional widgets BEFORE we measure
+        $LF2.e0 validate
+
+        # Assemble the labelframes into the page
+        grid $LF1 -row 0 -column 0 -padx 8 -pady 8 -sticky ew
+        grid $LF2 -row 1 -column 0 -padx 8 -pady 8 -sticky ew
+
+        # Stretch last column (horiz) of labelframes to use extra space from...
+        grid columnconfigure $LF1   2 -weight 1
+        grid columnconfigure $LF2   2 -weight 1
+
+        # ... whatever space THEY get passed from the surrounding page frame
+        grid columnconfigure $frame 0 -weight 1
+
+        pack $frame -side right -fill both -expand y
+        update idletasks
+        set maxwidth  [max $maxwidth  [winfo reqwidth  $w(prefs)]]
+        set maxheight [max $maxheight [winfo reqheight $w(prefs)]]
+        pack forget $frame
+
         # # # # # # # Assemble all the page/Tabs and Display one  # # # # # # #
         setPrefPage [set g(prefPage) $w(prefs).fGeneral]
 
         # compute a reasonable FIRST location for the window...
         centerWindow $w(prefs) "$maxwidth $maxheight"
     }
+
+    # Config Dialog RE-display: BEGIN with NO alert (USUALLY agrees at start)
+    # THEN reinstate alert (via validation) if it was DEFERRED from last time
+    if {[info exists g(deferD)]} {
+        foreach key $g(deferD) {
+            switch -glob $key {
+            ign*E*Ln { set B 8 }
+            ign*R*Ln { set B 4 }
+            ignS*    { set B 2 }
+            diffcmd  { set B 1 }
+            default  { set B 0 }
+            } 
+            verify alertD $key [lindex [dict get $w(prefD) $key] 2] $B
+        }
+        unset g(deferD)
+        Dbg "REINSTATED hilite: alertD STILL [dict get $w(prefD) alertD]" 1
+    } { dict set w(prefD) alertD 0 }
+
+    # Too helpful to whack - can FORCE simply by PREFIXing to it: 1$g(debug)
+    if {[set prefDbg $g(debug)]} {
+        Dbg "PREF DICT:" $prefDbg
+        foreach {key data} $w(prefD) { Dbg "$key {$data}" $prefDbg "\t" }
+    }
+
     # FINALLY  - display it!
     Dialog show $w(prefs)
 }
@@ -6457,12 +6812,12 @@ proc getKey {cmd wdg key args} {
             if {[winfo exists $wdg]
             &&  "$wdg" != "[set win [winfo containing {*}$args]]"} {
                 # Somewhere else ... must we cancel?
-                if {"$win" == "$w(prefs).buttons.dismiss"} {
+                if {"$win" == "$w(prefs).btns.dismiss"} {
                     Dbg {  Was $win - need to cancel}
                     getKey cancel $wdg $key
                     $win invoke
                     return -code break
-                } elseif {"$win" == "$w(prefs).buttons.apply"} {
+                } elseif {"$win" == "$w(prefs).btns.apply"} {
                     # sortof makes sense, if you think of it as a "shortcut"
                     Dbg {  Was $win - need to accept}
                     getKey insert $wdg $key
@@ -6532,79 +6887,390 @@ proc keyMods {state key} {
 }
 
 ###############################################################################
-# Manipulating inline SUPPRESSION state transitions during Prefs editting
-# needs to keep 5 widget-tracked and 1 'combined' state value in concert
-#   AND implement a cascaded precedence arrangement of LEGAL combinations
+# Formulate/return the DESIGNATED Cmd w/all ACTIVE options (not incldg Files)
 ###############################################################################
-proc inlCombineState {key val} {
-    global w tmpopts
-    
-    # The boolean WIDGET values $w(${keyi}N) have a powers-of-two NAMING and
-    # 'ON-value's connotation as each DESCRIBEs a specific BIT
-    # in the COMBINED value: tmpopts($key)
-    #
-    # Begin by setting/clearing the DESIGNATED bit in the COMBINED value
-    #       (because it was JUST TOGGLED by ONE of the widgets)
-    incr tmpopts($key) [expr $w($key$val) ? $val : -$val]
+proc formOpts {cmd} {
+    global  tmpopts opts
 
-    # Bit(16) is allowed to freely toggle, irrespective of any others,
-    # as may Bits(1 or 2) PROVIDED any higher PRECEDENCE bits ARE clear.
-    # Collectively, this establishes a 3 Tier "8->4->(2 or 1)" precedence
-    # ranking among ONLY the lower 4 bits
-    #
-    # Based on what Bit just CHANGED, clear any from the WRONG ranking...
-    switch $val {
-    16  {   return }
-    8   {   lassign {0 0 0}   w(${key}4) w(${key}2) w(${key}1) }
-    4   {   if {($tmpopts($key)&8)} {set w(${key}8) 0
-            } { lassign {0 0} w(${key}2) w(${key}1) }
+    # Each command OPERATES from ITS distinct context despite SHARED keys
+    # N.B> When ADDing keys to the Engine page, need to put them HERE as well
+    set keys {}
+    switch $cmd {
+        egnSrchCmd { upvar 0 opts ctx
+            if {[lindex $opts($cmd) 0] ne [lindex $opts(egnCmd) 0]} {
+                lappend keys egnSCase eopSCase egnSBlanks eopSBlanks    \
+                            egnS#Blanks eopS#Blanks egnS@TabX eop@STabX \
+                            egnS@EOL eopS@EOL egnSTabSiz eopSTabSiz
+            } else {
+                # If names match then SHARE the keys/vals FROM the "egnCmd"
+                lappend keys egnCase eopCase egnBlanks eopBlanks egn#Blanks \
+                            eop#Blanks egn@TabX eop@TabX egn@EOL eop@EOL    \
+                            egnTabSiz eopTabSiz
+            }
+            lappend keys   egnXcludFil eopXcludFil
         }
-    2   -
-    1   {   lassign {0 0} w(${key}8) w(${key}4) }
+        egnCmd { upvar  0 tmpopts ctx
+            if {$ctx(ignSuprs)} {
+            lappend keys   egnCase eopCase egnBlanks eopBlanks egn#Blanks \
+                            eop#Blanks egn@TabX eop@TabX egn@EOL eop@EOL  \
+                            egnTabSiz eopTabSiz
+            }
+        }
     }
 
-    # ...then simply REBUILD the combined value.
-    set tmpopts($key) \
-            [expr $w(${key}16)+$w(${key}8)+$w(${key}4)+$w(${key}2)+$w(${key}1)]
+    # Certain keys need VALUES (and ANY might be config'd as "unused")
+    set cmd $ctx($cmd)
+    foreach {key opt} $keys {
+        if {!$ctx($key)} { continue }
+
+        # Keys w/VALUES have to worry about missing data and/or formatting
+        if {[string match {*[FS]i[lz]} $key]} {
+            set fmt [string match { *} $ctx($opt)] ;# seperate Val from Key?
+            switch $key$fmt {
+                egnSTabSiz0 -
+                egnTabSiz0 { lappend cmd $ctx($opt)$ctx(tabstops) }
+                egnSTabSiz1 -
+                egnTabSiz1 {
+                    lappend cmd [string range $ctx($opt) 1 end] $ctx(tabstops)
+                }
+                egnXcludFil0 -
+                egnXcludFil1 {
+                    # This is specified multiple times (once per pattern)
+                    foreach val $ctx(xcludeFils) {
+                        if {$fmt} {
+                            lappend cmd [string range $ctx($opt) 1 end] $val
+                        } { lappend cmd $ctx($opt)$val }
+                    }
+                }
+            }
+
+        # Otherwise its JUST the optionflag all by itself
+        } { lappend cmd $ctx($opt) }
+    }
+    return $cmd
 }
 
 ###############################################################################
-# align status of passed widget(s) to agree with passed var($index) bool value
-#   N.B> TWO versions - "...Tr..." interfaces with traced array variables
+# Manipulating SUPPRESSION state transitions during Prefs editting, needs to
+# keep 5 widget-tracked (and potentially) 1 'combined') bit values in concert
+#   AND enforce the cascaded precedence arrangement of LEGAL combinations
+# (N.B> Oh yeah, there are also THREE distinct SETS of 5 widgets - stay sharp!)
+###############################################################################
+proc pickSuprs {key bit} {
+    global w tmpopts opts
+    
+    # The (fundamentally boolean) values $w(${key}N) have a powers-of-two
+    # NAMING and 'ON-value's connotation as each DESCRIBEs a specific BIT
+    
+    # Bit(16) is permitted to freely toggle, irrespective of any others, as
+    # may bits (1 or 2) PROVIDED the higher PRECEDENCE bits (4 or 8) ARE zero.
+    # Collectively, this establishes a 3 Tier "8->4->(2 or 1)" precedence
+    # ranking among ONLY the lower 4 (out of 5) bits
+    #
+    # Based on what Bit just CHANGED, clear any from the WRONG rankings...
+    switch $bit {
+    1   -
+    2   {   lassign {0 0} w(${key}8) w(${key}4) }
+    4   {   if {($w(${key}8) & 8)} { set w(${key}8) 0
+            } { lassign {0 0} w(${key}2) w(${key}1) }
+        }
+    8   {   lassign {0 0 0}   w(${key}4) w(${key}2) w(${key}1) }
+    }
+
+    # ...then simply REBUILD the combined value (returning the result).
+    return [expr $w(${key}16)+$w(${key}8)+$w(${key}4)+$w(${key}2)+$w(${key}1)]
+}
+
+###############################################################################
+# A collection of (various) entry widget per-keystroke data content validators
+#   (most used by Preferences - but 'occupancy' is EXCLUSIVELY for NewDiff use)
+# PLUS subsequent logic fragments that deal with interactions RELATED to them.
+###############################################################################
+proc verify {subcmd args} {
+    global w tmpopts opts
+
+    # Establish a DEFAULT return status
+    set result 1
+    #   (individual subcmds -SPECIFICALLY real VALIDATORS- override as needed)
+
+    switch -- $subcmd {
+
+        revert { lassign $args W key oldV
+            # REAL Validator: (but always returns TRUE)
+            # Erase keystroke from widget display (by RELOADING its -textvar)
+            # N.B> expected to be invoked via "entry -invcmd ..." - MUST NOT be
+            #   done until AFTER returning: '-validate none' WOULD become set!
+            after idle "$W config -validate key ; set tmpopts($key) \"$oldV\""
+        }
+
+        egnSOpt -
+        egnOpt { lassign $args W newV chr V
+            # REAL Validator (the options themselves):
+            # Only blanks are DISALLOWED (unless its the PERMITTED pad-flag)
+            set result [expr {$chr!=" " || [string first " " $newV $V] <0}]
+            # Passed checkbox widget is DISABLED if value is fewer than 2 chars
+            if {[string length $newV] - ([string index $newV 0]==" ") < 2} {
+                # Also DE-hilite widget (unneeded for egnSOpt, but harmless)
+                $W deselect  ;  verify hlit $W 1 1  ;  alignState $W 0
+            } {                                        alignState $W 1 }
+        }
+
+        egnCfg { lassign $args LFR Vc1 vc2
+            # MONITORING Validator: (returned status always TRUE)
+            # Checks 1 or BOTH conditions (based on WHICH widget called):
+            # - When editting the egnCmd, must reflect into "diffcmd"
+            #   (AND trigger the Alert, it in turn, causes).
+            if {$vc2 == "egnSrchCmd"} {
+                after idle {
+                    set tmpopts([set Key "diffcmd"]) [formOpts egnCmd]
+                    verify alertD $Key [lindex [dict get $w(prefD) $Key] 2] 1
+                    }
+            }
+            # - Yet ALWAYS watches BOTH engine commands for 1st-word agreement
+            # tripped by changes in 1st WORD in EITHER of the 2 Engine cmds.
+            # First decide which WAY (manage -or- remove) the Option rows ...
+            #   ... then go DO it (basically one row at a time)
+            # (kinda presumptious about names and layout), Eh...feeling lazy.
+            if {[lindex $Vc1 0] ne [lindex $tmpopts($vc2) 0]} {
+                foreach row {2 3 4 5 6 7} {
+                  # Doing this when UNNECESSARY has no detrimental effect
+                  grid $LFR.c${row}0  $LFR.c${row}1  $LFR.e${row}1 }
+            } { foreach row {2 3 4 5 6 7} {
+                  # (loop lets a PREV UNmanaged state "do nothing" gracefully)
+                  foreach Wdg [grid slaves $LFR -row $row] {grid remove $Wdg} }
+            }
+        }
+
+        hlit { lassign $args W newV oldV
+            # REAL Validator:
+            # Rather simple - hilite 'alert' status of given Wdg WHEN provided
+            # values DIFFER (else DE-hilite) - BUT respect and/or deal with
+            # the potentially varying STATE of that widget (disabled-> no chg!)
+            set result [expr {"$oldV"!="$newV"}]
+            #   N.B> HOWEVER - 'state' MAY depend both on method of invocation
+            #       (Keyboard/mouse) AND the defn of widget (entry/checkbutton)
+            #       with regard to WHICH attribute should RECEIVE the hilite
+            switch [$W cget -state] {
+                readonly {
+                    # ENTRY widget:
+                    # ('disabled' color IS the 'normal BG' for a readonly)
+                    $W config -readonlybackground [expr {$result ? \
+                             $tmpopts(inform) : [$W cget -disabledbackground]}]
+                }
+                active -
+                normal {
+                    # CHECKBUTTON: 'active' occurs for mouse hover (thus click)
+                    # 'normal' covers most everything else regardless of Widget
+                    $W config -background [expr {$result ? \
+                                                  $tmpopts(inform) : $w(bgnd)}]
+                }
+                default {
+                    # Only expected when W-state: 'disabled' (rare possibility)
+                    set result 0
+                }
+            }
+        }
+
+        alertD { lassign $args key W bit
+            # MONITORING Validator: (returned status always TRUE)
+            # LOTS OF WORK for mostly GUI-fluff to WARN user that the Pref edit
+            # LEADS to EXECUTING Diff (which wipes any EXISTING temporal work).
+            #   Hilites Apply-Btn if ANY contributors exist AND the 'W'dg
+            #   itself if IT is one of those RESPONSIBLE (there can be several)
+            # Implies to user both IF and WHY the Diff will occur when APPLIED
+            # and affords the opportunity to NOT CAUSE such changes casually
+            switch -glob $key {
+                reset {
+                    #   Used when Apply/Dismiss-ing dialog to "start fresh" for
+                    # NEXT time (in lieu of destroying/rebuilding the Dialog).
+                    # Forcibly DE-HILITEs most everything! Does NOT ALTER ANY
+                    # state variables (except during a DISMISS of INLINE items)
+                    # N.B> Dismiss/Apply ITSELF assigns the ACTUAL Pref value
+                    dict for {K data} $w(prefD) { lassign $data bit PfX Wdg
+                        if {[string match {[ie]gn*} $K] && $PfX=="egnOpt"} {
+                            # Force EVERY alert hilite OFF.
+                            verify hlit $Wdg 0 0
+
+                        # Snag 'diffcmd' widget as it passes by (used shortly)
+                        } elseif {$K=="diffcmd"} { set W $Wdg }
+                    }
+                    verify hlit $W $tmpopts(diffcmd) $opts(diffcmd)
+
+                    # Marginally related: these 'hidden' widgetVars need to
+                    # piggyback on any RESET being performed as well.
+                    #   (has no effect when performing APPLY, as ALREADY set)
+                    foreach bit {16 8 4 2 1} {
+                        set w(inlSuprs$bit) [expr {$opts(inlSuprs) & $bit}]
+                    }
+
+                    # Last, dont forget to de-hilite the Apply button itself
+                    #   N.B> Associated alert-contrib Bits RESETs at RE-display
+                    verify hlit $w(prefs).btns.apply 0 0
+                    return $result
+                }
+                ign*R*Lnopt -
+                ign*R*Ln {
+                    # Hilite depends on TWO (related) keys,
+                    # and what values EACH will ultimately have -
+                    #   Whats awkward is BOTH trying to HILIT the SAME widget
+                    # (the toggle).
+                    #   If any LIST items EXIST and the toggle CHANGED, - OR -
+                    # is PRESENTLY on and the ITEMS were changed, then HILIT;
+                    # Otherwise HILITE is either forced OFF *or* left unchanged
+                    if {[string match {*opt} $key]} {
+                        # (ONLY invoked when a physical LIST change occurred)
+                        if {$tmpopts(ignoreRegexLn)} { set OnOff \
+                                    [verify hlit $W $tmpopts($key) $opts($key)]
+                        } { return $result }
+
+                        # This handles whenever the TOGGLE is flipped
+                    } elseif {[llength $tmpopts(${key}opt)]} { set OnOff \
+                                    [verify hlit $W $tmpopts($key) $opts($key)]
+                    } { set OnOff 0 }
+                }
+                ign*E*Ln {
+                    set OnOff [verify hlit $W $tmpopts($key) $opts($key)]
+                }
+                pushtomenu {
+                    #  (really just a util fcn tangentally related to "alertD")
+                    # The first 3 View->menuitems need to USE the HILITE color
+                    # to ALSO warn of an impending Diff. Simply PUSH that color
+                    # into them should that color HAPPEN to become changed.
+                    foreach item {0 1 2} {
+                        $W entryconfig $item -activebackground $opts(inform)
+                    }
+                    return $result
+                }
+                diffcmd -
+                ignSuprs {
+                    # When executing via "diffcmd", SOMEONE already changed it;
+                    # otherwise "ignSuprs" was toggled (ON-or-OFF) thus it must
+                    # be recomputed (which will come thru here a SECOND time).
+                    if {$key=="ignSuprs"} {
+                        set tmpopts(diffcmd) [formOpts egnCmd]
+                    }
+
+                    set OnOff [verify hlit $W $tmpopts(diffcmd) $opts(diffcmd)]
+
+                    # However, if "ignSuprs" was just TOGGLED Off, then it
+                    # BLOCKED any Engine-based CHANGES and could thus BECOME
+                    # the NEW reason for a different 'diffcmd'. Re-evaluate if
+                    # any Engine elements should therefore DE-hilite by passing
+                    # a FICTICIOUS keyname (which is BASICALLY a simulation of
+                    # a 'fall-thru' switch-case which TCL doesn't support!)
+                    if {$key=="ignSuprs"} { verify alertD egnOpt }
+                }
+                default {
+                    # These are specific Engine pref toggles tweaked On/Off
+                    # - determine if that results in a CHANGE in the alert
+                    # status (particularly when being turned OFF!).
+                    #   Must assess ALL the POSSIBLE reasons, reflecting EACH
+                    # status as they MAY BE inter-related!
+                    dict for {K data} $w(prefD) { lassign $data bit PfX Wdg PrD
+                        if {[string match {egn*} $K] && $PfX=="egnOpt"} {
+                            # Next align any alert hilites (either ON or OFF).
+                            # FORCE an OFF when predecessor (PrD) is ALSO OFF.
+                            #   N.B> 'bit' chooses WHERE TO FIND values needed
+                            if {$bit} { incr AnyToggled \
+                                [verify hlit $Wdg [expr {$tmpopts($PrD) ? \
+                                       $opts($K) : $w($PfX$bit)}] $w($PfX$bit)]
+                            } {         incr AnyToggled \
+                                [verify hlit $Wdg [expr {$tmpopts($PrD) ? \
+                                       $opts($K) : $tmpopts($K)}] $tmpopts($K)]
+                            }
+
+                        # Snag 'ignSuprs' widget as it passes by (need below)
+                        } elseif {$K=="ignSuprs"} { set W $Wdg }
+                    }
+
+                    # If ALL above verifys are OFF, RE-verify $PrD widget *VIA*
+                    # "diffcmd" (NOT "ignSuprs"!!!) so that ALL it DOES is
+                    # the 'verify hlit' (but CONTINUING UpTree) - BUT USE
+                    # the 'bit' value for ignSuprs so it removes any Apply-btn
+                    # hilite IFF DE-hiliting "ignSuprs" was ALSO accomplished.
+                    if {!$AnyToggled} { verify alertD diffcmd $W 2 }
+                    return $result
+                }
+            }
+
+            # Weird boolean expression SETS a specific BIT per the OnOff value
+            # Odder YET - 'dict update' CAUSES "isApplied" to BECOME a localVar
+            # to CONTAIN that updated value - which THEN hilites the Apply btn!
+            dict update w(prefD) alertD isApplied \
+                "set isApplied \[expr {(\$isApplied & ~$bit)+($bit * $OnOff)}]"
+            verify hlit $w(prefs).btns.apply 0 $isApplied
+        }
+
+        integer { lassign $args newV digit
+            # REAL Validator:
+            # Fairly simple -
+            #   IF proposed value is still an integer - accept - else dont.
+            #
+            # N.B> allows SURROUNDING blanks UNLESS 'digit' (%S) was PROVIDED
+            #      (Note: w/o '-strict' completely EMPTY is considered VALID)
+            if {$digit=={} || [string match {[0-9]} $digit]} {
+                set result [string is integer $newV]
+
+            } elseif {$digit!={} && $digit==" "} {
+                set result 0 ;# caller disallows any 'padding' blanks
+
+            } { set result [string is integer $newV] }
+        }
+        
+        occupancy { lassign $args  Wdg newV
+            # MONITORING Validator: (returned status always TRUE)
+            # Designed for the newDiff 'revision' fields
+            #   Disables the LABEL (W) when the ENTRY value (newV) is empty ...
+            #   (a GUI feedback trick to discern an EMPTY .vs. BLANK field)
+            #
+            #   BUT also monitors the main PAIR of Rev entry-widgets to warn
+            #   user about using entry widget #2 w/o using #1
+            #       (because 'assemble-args' would then READ #2 as-if #1)
+
+            # (grab instance number of widget - not applicable if none exists)
+            if {[string is digit [set ndx [string index $Wdg end]]]} {
+                set Other([set Other(2) 1]) 2   ;#  (meta-pgm identity value)
+
+                # Next, derive meta-addressable names for PAIRED entry widget
+                append W($ndx) [file rootname $Wdg] \
+                                             [string map {l e} [file ext $Wdg]]
+                set W($Other($ndx)) [string repl $W($ndx) end end $Other($ndx)]
+
+                # finally adjust the bkgnd of #2 if it is USED when #1 is empty
+                if {($ndx==2 && "$newV" != "" && ![$W(1) index end])  \
+                ||  ($ndx==1 && "$newV" == "" &&  [$W(2) index end])} {
+                    $W(2) configure -bg     Tomato
+                } { $W(2) configure -bg [$W(1) cget -bg] }
+            }
+
+            # Simple length check determines STATE of the (provided) label-wdg
+            $Wdg configure -state [expr {[string length $newV] ?
+                                                      "normal" : "disabled"}]
+        }
+    }
+
+    # Each REAL validator has its OWN rules for acceptance, just return result
+    return $result
+}
+
+###############################################################################
+# Align status of passed widget(s) to agree with passed var($index) bool value
+#   N.B> 3 variants - "...Tr..." interfaces with traced array variables (which
+#      'linkState' CREATEs by naming the Controll-ED WIDGET & Controll-ING Var)
 #        Basic version allows a LIST of widgets to be supplied for alignment
 ###############################################################################
-proc alignTrState {widget name index op} {
-    upvar $name var
+proc linkState {Wdg Var} {
+    uplevel trace add variable $Var write "{alignTrState $Wdg}"
+}
 
-    alignState $widget $var($index)
+proc alignTrState {widget name elem op} {
+    upvar $name var
+    alignState $widget $var($elem)
 }
 
 proc alignState {wdgLst boolean} {
     foreach W $wdgLst {
         $W configure -state [expr {$boolean ? "normal" : "disabled"}] }
-}
-###############################################################################
-# A generalized preferences entry-field data-type validator
-###############################################################################
-proc validate {type name index op} {
-    global tmpopts
-
-    # if we fail the check, attempt to do something clever
-    if {![string is $type $tmpopts($index)]} {
-        bell
-
-        switch -- $type {
-        integer {
-                regsub -all {[^0-9]} $tmpopts($index) {} tmpopts($index)
-            }
-        default {
-                # this should never happen. If you use this routine,
-                # make sure you add cases to handle all possible
-                # values of $type used by this program.
-                set tmpopts($index) ""
-            }
-        }
-    }
 }
 
 ###############################################################################
@@ -6647,7 +7313,7 @@ proc editLstPref {key args} {
                 -message "Remove this entry from the\n'$pref($key)' list ?" \
                                                        -default cancel ]}   \
                 { set tmpopts($key) \[lreplace \$tmpopts($key) $ndx $ndx];  \
-                                  editLstFeedback $wdg {    R e m o v e d} }
+                             editLstFeedback $wdg $key {    R e m o v e d} }
         }]
     } else {
         # Possibly validate the FORM of the specific entry before ADDING it
@@ -6659,7 +7325,7 @@ proc editLstPref {key args} {
             }]
         } else {
             after idle [subst { lappend tmpopts($key) {$value} ; \
-                                        editLstFeedback $wdg {    A d d e d}
+                                   editLstFeedback $wdg $key {    A d d e d}
             }]
         }
     }
@@ -6668,12 +7334,20 @@ proc editLstPref {key args} {
 ###############################################################################
 # Pure unadulterated GUI fluff (lets user KNOW their edit was accepted)
 ###############################################################################
-proc editLstFeedback {wdg msg} {
+proc editLstFeedback {wdg key msg} {
+    global w
     # Pretend to enter a new value (but dont let the command fire) ... then
     # 1250ms later, clear with an EMPTY value (and LET it fire w/no effect)
     $wdg configure -commandstate disabled
     $wdg configure -value "$msg"
     after 1250 "$wdg configure -commandstate normal -value {}"
+
+    # Admittedly strange place to put this, but from a SEQUENCE point-of-view
+    # it snags that the edit HAS OCCURRED which warrants FURTHER feedback.
+    #   Other oddity is redirecting such feedback into a RELATED widget
+    if {$key=="ignoreRegexLnopt"} { verify alertD $key [lindex \
+                          [dict get $w(prefD) [string range $key 0 end-3]] 2] 4
+    }
 }
 
 ###############################################################################
@@ -6705,6 +7379,7 @@ proc setPrefPage {which} {
     pack forget $w(prefs).fAppearance
     pack forget $w(prefs).fDisplay
     pack forget $w(prefs).fBehavior
+    pack forget $w(prefs).fEngine
     pack $which -side right -fill both -expand y
 }
 
@@ -6714,24 +7389,33 @@ proc setPrefPage {which} {
 # decision to erase them AND dismissal of the dialog on that answer
 ###############################################################################
 proc prefdismiss {prefwin} {
-    global pref opts tmpopts
+    global g pref opts tmpopts
 
     # Anything here that was UN-"Apply"-ed ?
+    #   (that WASN'T specifically DEFERed)
     foreach key [array names pref] {
-        if {"$tmpopts($key)" ne "$opts($key)"} {
+        if {"$tmpopts($key)" ne "$opts($key)"
+        && (![info exists g(deferD)] || $key ni $g(deferD))} {
             if {![info exists YN]} {
                 set YN [popmsg "You made UN-APPLIED edits !\n\n   Remove them?"\
                                 "Please confirm" question yesno $prefwin]
                 if {$YN == "no"} { return }
             }
             set tmpopts($key) "$opts($key)"
+            Dbg "Dismiss: Un-setting $key"
         }
     }
-    if {![info exists YN] || $YN == "yes"} {Dialog dismiss $prefwin}
+    if {![info exists YN] || $YN == "yes"} {
+        # Make certain any internal Vars are re-aligned w/what WILL exist
+        # and ensure nothing remains hilited, then UNMAP the Dialog
+        verify alertD reset
+        Dialog dismiss $prefwin
+    }
 }
 
 ###############################################################################
-# Apply customized preferences ($WdG is only provided when invoked from dialog)
+# Apply customized preferences - $WdG is only provided when invoked from dialog
+#   and is the ID of the 'Apply' button that caused it to become invoked
 # Expects $opts() holds CURRENT settings; $tmpopts() ALL (possibly CHGD) values
 ###############################################################################
 proc prefapply {{WdG {}}} {
@@ -6815,7 +7499,7 @@ proc prefapply {{WdG {}}} {
 
     # Make certain the (now established) Text FG/BG colors are PUSHed into
     # attrs needed to visibly see their focus-highlight border, and the BG
-    # of their adjoining Info windows (can just get seed values from Left)
+    # of their adjoining Info windows (just get seed values from CURRENT win)
     set fg [$w(acTxWdg) cget -foreground]
     set bg [$w(acTxWdg) cget -background]
     foreach txtwin {Left Right merge} {
@@ -6907,29 +7591,38 @@ proc prefapply {{WdG {}}} {
     set OTHER(showinline1) showinline2
     set OTHER(showinline2) showinline1
 
-    # ... next, preload any keys needing their OWN precedence order ...
-    #   (Reason: chgd content of an '...opt' field that IS [and WILL] remain
-    #            in use, OR turning the entire category ON/OFF )
-    lappend keys ignoreEmptyLn ignoreRegexLnopt ignoreRegexLn \
-                 ignoreblanksopt ignoreblanks
+    # ... NEXT, preload any keys needing their OWN precedence order ...
+    # (Does anyone appreciate all this work for 'auto-Diff'ing?)
+    #
+    #   (Reason: must see ANY key that MIGHT trip an 'error' BEFORE we look at
+    #            whether the Diff cmd changed. EG- ANY of the hotkey bindings!!
+    #            (Would need to DEFER a redo-Diff execution if errors detected)
+    lappend keys genEdit genFind genNxfile genPvfile genRecalc genXit navFrst \
+                   navLast navNext navPrev mrgLeft mrgRght mrgRtoL mrgLtoR \
+                   geometry diffcmd
 
-    #   (Reason: switching among inline algorithms, including to ON or OFF)
+    #   (Reason: chgd content of an '...opt' field that IS [and WILL] remain
+    #            in use, OR turning the entire category ON/OFF for a redo-Diff)
+    lappend keys ignoreEmptyLn ignoreRegexLnopt ignoreRegexLn
+
+    #   (Reason: switching among inline algorithms, INCLUDING simple ON or OFF)
     lappend keys showinline1 showinline2
 
-    #   (followed by EVERY PREF defined - BUT we only process each ONCE)
-    #   N.B> makes certain we dont MISS any (as has happened before... )
+    #   (followed by EVERY PREF defined - BUT each mostly PROCESSES once)
+    #   N.B> ensures we dont MISS any (as has happened before... )
     lappend keys {*}[array names pref]
-    set ONCE {}
 
     # ... finally, init the flags we need to derive - and then GET TO IT!!
     set remap [set remark 0]         ;# defaulted as: do NOT remap or remark
     set inlActn {}                   ;#  NOR 'compute-inlines' or force a Diff
-    if {[info exists  g(redoDiff)]} {
-        set redoDiff $g(redoDiff)    ;#    UNLESS that rediff was PENDING!!!
+    if {[info exists  g(deferD)]} {
+        set redoDiff $g(deferD)    ;#    UNLESS that rediff was PENDING!!!
+        unset g(deferD)
     } { set redoDiff {} }
+
     foreach key $keys {
         # What (if anything) is transitioning ?
-        if {$key ni $ONCE && "$tmpopts($key)" ne "$opts($key)"} {
+        if {$tmpopts($key) ne $opts($key) && $key ni $redoDiff} {
             switch $key {
             "geometry" {
                 # More of a syntax-chk validation than a transition issue
@@ -6940,36 +7633,45 @@ proc prefapply {{WdG {}}} {
                     set feedback red
                 }
             }
+            "diffcmd" -
             "ignoreEmptyLn" {
-                set redoDiff $key ;# either transition (on/off) counts
+                # EITHER a NEW Diff command was formatted, OR tertiary output
+                # needs to be RE-analyzed for ignoring empty-line hunks. 
+                #   N.B> The fact that this IS DIFFERENT is sufficeint
+                if {$key ni $redoDiff} { lappend redoDiff $key }
             }
-            "ignoreRegexLnopt" -
-            "ignoreblanksopt" {
-                # Does anyone appreciate all this work for 'auto-Diff'ing?
-                # Here we cover changes made in the "...opt" fields while
-                # REMAINING in a (non-transitional) 'ON' state...
+            "ignoreRegexLnopt" {
+                # Here we catch changes made in the "...opt" field while the
+                # toggle REMAINS in a (non-transitional) 'ON' state...
                 set key2 [string range $key 0 end-3]
-                if {$tmpopts($key2) && $opts($key2)} {set redoDiff $key2}
+                if {$tmpopts($key2) && $opts($key2) && $key2 ni $redoDiff} {
+                    lappend redoDiff $key2
+                }
             }
-            "ignoreRegexLn" -
-            "ignoreblanks" {
-                # Turning these 'ON' requires REFERING to a non-null opt
-                #   (N.B> depends on "...opt" ALREADY being processed)
+            "ignoreRegexLn" {
+                # Turning this 'ON' requires REFERING to a non-empty opt list
+                #   (N.B> depends on "...opt" being processed FIRST)
                 if {$tmpopts($key)} {
-                    # Unfortunately each has its own notion of 'non-null'
-                    switch ${key}opt {
-                    "ignoreblanksopt" {
-                            if {"[string trim $opts(${key}opt)]" == ""} {
-                                set tmpopts($key) 0} {set redoDiff $key
-                            }
-                        }
-                    "ignoreRegexLnopt" {
-                            if {![llength $opts(${key}opt)]} {
-                                set tmpopts($key) 0} {set redoDiff $key
-                            }
-                        }
-                    }
-                } else {set redoDiff $key} ;#but turning 'OFF': gauranteed
+                    if {![llength $opts(${key}opt)]} { set tmpopts($key) 0
+                    } elseif {$key ni $redoDiff} { lappend redoDiff $key }
+
+                #but turning 'OFF': gauranteed (couldn't have been ON w/o data)
+                }  elseif {$key ni $redoDiff} { lappend redoDiff $key }
+            }
+            "egnCase" -
+            "egnBlanks" -
+            "egn#Blanks" -
+            "egn@TabX" -
+            "egn@EOL" -
+            "egnTabSiz" {
+                # All these are dependent on the EVENTUAL state of "ignSuprs"
+                #   When ON, each of these is a contributor to "diffcmd" and
+                # thus subject to DEFERRAL if an error occurs.
+                # Otherwise, simply accepting the toggle is sufficient
+                #   (N.B> MUST be processed AFTER having seen "diffcmd")
+                if {$tmpopts(ignSuprs) && "diffcmd" in $redoDiff} {
+                    lappend redoDiff $key
+                }
             }
             "showinline1" -
             "showinline2" {
@@ -7059,9 +7761,13 @@ proc prefapply {{WdG {}}} {
             "overlaptag" -
             "tagtext"    -
             "textopt"    {set remark 1}
-        } }
-        set opts($key) $tmpopts($key)
-        lappend ONCE $key
+            }
+
+            if {$feedback=="green" || $key ni $redoDiff} {
+                set opts($key) $tmpopts($key)
+                Dbg "ACCEPTED $key" 0 "Apply: "
+            } { Dbg "DEFERRED $key" 0 "Apply: "}
+        }
     }
 
     # interpret this binary toggle into its true value
@@ -7081,7 +7787,7 @@ proc prefapply {{WdG {}}} {
     # N.B> if any prior ERRORS occurred then THOSE ITEMS reverted to UNCHANGED,
     #   and are UNABLE to trigger any derivative changes, thus do NOT restrict
     #   performing such actions (may as well do what we KNOW needs doing)
-    if {$redoDiff == ""} {
+    if {![llength $redoDiff]} {
         # (what about any altered tag SETTINGs ?)
         if {$remark} {
             eval $inlActn ;# MAYBE recompute inlines (so they CAN be tagged ?)
@@ -7176,18 +7882,18 @@ proc prefapply {{WdG {}}} {
     # Force a whole new Diff if user changed ANY of the result semantics
     # PROVIDED we passed thru re-configuration unscathed; OTHERWISE ...
     #   remember we NEED to, but ONLY GENTLY remind User to fix their mistakes
-    if {$redoDiff != ""} {
-        if {$feedback == "green"} {reCalcD $redoDiff} else {
+    if {[llength $redoDiff]} {
+        if {$feedback == "green"} {verify alertD reset; reCalcD $redoDiff} {
             popmsg "Due to previous errors, a detected need for re-invoking\
             Diff has been deferred.\n\n    Respecify any items that were\
             'Reverted' and 'Apply' them again"     warning      $w(prefs) \
             "Diff request deferral..."
-            set g(redoDiff) $redoDiff ;# Remember this as PENDING!!
+            set g(deferD) $redoDiff ;# Remember this is PENDING!!
         }
     } elseif {$inlActn != {} && $opts(showinline2)} {
         # Must nudge L/R Text widget to re-evaluate visibility of INLINES
         # N.B> asking to see the Window *2nd* line is a virtual guarantee that
-        #   *NOTHING* need scroll - but the REQUEST gains us a Visability scan
+        #   *NOTHING* will scroll - but the REQUEST gains us a Visability scan
         after idle after 0 $w(acTxWdg) SEE @0,0+1line
     }
 }
@@ -7202,10 +7908,10 @@ proc prefsave {wdg} {
     if {[file exists $g(rcfile)]} {file rename -force $g(rcfile) "$g(rcfile)~"}
     set fid [open $g(rcfile) w]
 
-    # put the tkdiff version in the file. It might be handy later
+    # Declare WHEN tkdiff wrote this file (and what version was used)
     puts $fid "# This file was generated by $g(name)"
     puts $fid "# [clock format [clock seconds]]"
-    # NOT a preference, per se - intended for auto DEPRECATED-pref adaptation
+    # NOT a preference, per se - but is used when MORPHing outdated Prefs
     puts $fid "define prefsVrsn {$g(version)}\n"
 
     # Now, put ALL of the preferences in the file
@@ -7887,8 +8593,10 @@ proc do-merge-choice {newversion} {
     global g w opts
 
     set hID [hunk-id $g(pos)]
+    switch $g(merge$hID) { 1 {incr g(statusMrgL) -1} 2 {incr g(statusMrgR) -1}}
     merge-select-version $hID $g(merge$hID) $newversion
-    set g(merge$hID) $newversion
+    switch [set g(merge$hID) $newversion] {
+                                1 {incr g(statusMrgL)} 2 {incr g(statusMrgR)} }
 
     # Must ask user (when this is a collision) if their choice CLEARed it
     if {[info exists g(overlap$hID)]} {
@@ -8600,7 +9308,8 @@ proc mark-diffs {{rmvrpl {}}} {
 
     set wdg(1) $w(LeftText)
     set wdg(2) $w(RightText)
-    lassign {0 0 0 0 0 0} g(COUNT) g(count) delta(1) delta(2) boxW boxC
+    lassign {0 0 0 0 0 0 0 0} \
+      g(COUNT) g(count) g(statusMrgL) g(statusMrgR) delta(1) delta(2) boxW boxC
 
     # Distinguishing between EDITTING .vs. LOADING of the global diff hunk
     # list is defined by the OPTIONAL "(r)e(m)o(v)e and (r)e(pl)ace" argument
@@ -8700,7 +9409,6 @@ proc mark-diffs {{rmvrpl {}}} {
                 incr g(count)
             }
             incr g(COUNT) ;# It ALWAYS counts in the superset list
-
 
             # However, ALL existing hunks BEYOND the injected entries require
             # certain minor realignments:
@@ -8863,6 +9571,10 @@ proc mark-diffs {{rmvrpl {}}} {
 
         # Append entry into combobox (and hilight when its a 3way collision)
         if {[string is lower "$type"]} {
+
+            # Also update the status window merge counters
+            switch $g(merge$d) { 1 { incr g(statusMrgL) } 2 { incr g(statusMrgR) } }
+
             $w(combo) list insert end \
                              "[set item [format "%*d: %s" $fmtW $g(count) $d]]"
             if {[info exists g(overlap$d)]} {
@@ -9176,12 +9888,11 @@ proc rediff {} {
     do-show-Info
 
     # Diff the two files and store the summary lines into 'g(diff)'
-    set diffcmd $opts(diffcmd)
-    if {$opts(ignoreblanks)} {lappend diffcmd {*}$opts(ignoreblanksopt) }
-    lappend diffcmd $finfo(pth,$i) $finfo(pth,$j)
+    set cmd $opts(diffcmd)
+    lappend cmd $finfo(pth,$i) $finfo(pth,$j)
 
-    show-status "Executing {$diffcmd}"
-    lassign [run-command "$diffcmd"] diffOUT diffERR diffRC
+    show-status "Executing {$cmd}"
+    lassign [run-command "$cmd"] diffOUT diffERR diffRC
     set g(returnValue) $diffRC ;# Record REAL RC
 
     # Now, when that exit code *IS* 0 there are NO differences; when
@@ -9199,17 +9910,22 @@ proc rediff {} {
         # Historical note: OLDER 'diff' vrsns USED to produce:
         #   "Binary files ..(names).. are different" ON stdout WITH RC=1
         #   Newer ones do similar, BUT w/RC=2 (when non-text files are used)
-        # At least CHECK 1st line LOOKS (mostly) like a 'normal' diff header
-        if {[regexp {[0-9,]+[acd][0-9,]+} [lindex $lines 0]]} {
-            # Close enough - (at least protects us from unexpected formats)
-            lappend lines "0"; # Cheap trick: sentinel will flush NEXT loop
-        } else {
+        # At least VERIFY 1st line LOOKS (mostly) like a 'Normal' diff header
+        if {![string match {[0-9]*[acd][0-9]*} [lindex $lines 0]]} {
+            # Hmmm. Try converting (in place) FROM "Unified" format ...
+            deUnify lines
+            if {![string match {[0-9]*[acd][0-9]*} [lindex $lines 0]]} {
+                # ... Still NO? 
             popmsg "diff failed:$diffRC: Unrecognized diff format:
             [string range $diffOUT 0 75] ... (partial)"
             set Statmsg ">> NO COMPARISON POSSIBLE << due to errors"
             set lines {};   # Again, simulate 'identical' to avoid issues
             set diffRC 0
-        }
+
+        # Close enough - (at least protects us from unexpected formats)
+        #   Cheap trick: extra trailing sentinel will flush NEXT loop
+            } { lappend lines "0" }
+        }     { lappend lines "0" }
     }
 
     # Collect all lines containing diff hunk headers
@@ -9246,12 +9962,12 @@ proc rediff {} {
                     # Presume it WILL suppress (re-activating at each hunk)
                     set hID [string toupper $line]
                     if {[set Esuppress $opts(ignoreEmptyLn)]} {
-                        if {$opts(ignoreblanks) \
-                        &&  ([string length [string map {b {} w {} Z {}} \
-                                            $opts(ignoreblanksopt)]] \
-                        <    [string length $opts(ignoreblanksopt)])} {
-                            set Eexpn {^..[[:space:]]*$};# any of "-bwZ" used
-                        } else {set Eexpn {^..$}}       ;#     otherwise
+                        # Ignoring EMPTY lines CAN depend on BLANK suppression
+                        # (when active) as MOST can make ONLY WhtSpc evaporate
+                        if {$opts(ignSuprs) && ($opts(egnBlanks) + 
+                                         $opts(egn#Blanks) + $opts(egn@EOL))} {
+                            set Eexpn {^..[[:space:]]*$};# any of "-wbZ" used
+                        } { set Eexpn {^..$}}           ;#     otherwise
                     }
                     set Rsuppress [llength $opts(ignoreRegexLnopt)]
                 } elseif {[string length $line]-1} {
@@ -9315,13 +10031,11 @@ proc rediff {} {
         foreach {NDX LR} [list $i Left $j Right 0] {
             if ($NDX) {
                 # In 3-way merge - we diff EACH file "from" the ancestor
-                set diffcmd $opts(diffcmd)
-                if {$opts(ignoreblanks)} {
-                                     lappend diffcmd {*}$opts(ignoreblanksopt)}
-                lappend diffcmd $finfo(apth,$pairnum) $finfo(pth,$NDX)
+                set cmd $opts(diffcmd)
+                lappend cmd $finfo(apth,$pairnum) $finfo(pth,$NDX)
 
-                show-status "Executing {$diffcmd}"
-                lassign [run-command "$diffcmd"] diffOUT diffERR RC;#NOT diffRC
+                show-status "Executing {$cmd}"
+                lassign [run-command "$cmd"] diffOUT diffERR RC;#NOT diffRC
 
                 if {$RC < 0 || $RC > 1 || $diffERR != ""} {
                     popmsg "Ancestor/$LR diff failed:$RC:\n$diffERR\n\
@@ -9329,7 +10043,11 @@ proc rediff {} {
                     set diffRC 0; # Indicate we CANT do the 3way
                     break
                 } elseif {"[set lines [split $diffOUT "\n"]]" != "" && $RC} {
-                    if {![regexp {[0-9,]+[acd][0-9,]+} [lindex $lines 0]]}  {
+                    if {![string match {[0-9]*[acd][0-9]*} [lindex $lines 0]]} {
+                        # Once again, MAYBE its actually "Unified" format...
+                        deUnify lines ; # TRY to convert it (in place)
+                    }
+                    if {![string match {[0-9]*[acd][0-9]*} [lindex $lines 0]]} {
                         popmsg "Ancestor/$LR diff: Improper diff format:\n\n\
                             [string range $diffOUT 0 75] ...\n (partial output)"
                         set diffRC 0; # Again, we CANT do the 3way
@@ -9730,6 +10448,79 @@ proc rediff {} {
 }
 
 ###############################################################################
+# Convert "Unified" hunk format into "Normal" format (if that is what exists)
+###############################################################################
+proc deUnify { Var } {
+    upvar $Var var
+
+    # REWRITE the data as Diff "Normal" IFF currently "Unified"
+    set hdr -1 ; # Ignore EVERY line until 1st 'Unified' hunk header found
+    set typ {} ; # Ignore context lines until a (+/-) marked line found
+    foreach ln $var {
+        # Find a Unified hunk header
+        if {[string match {@@ * * @@*} $ln]} {
+            
+            # Extract line numbers/counts per this 'Unified' hunk header
+            regexp {@@ -([0-9]*)(,([0-9]*))?(?: \+)([0-9]*)(,([0-9]*))?.*} $ln\
+                      matchvar L na Lc R na Rc
+            if {$Lc=={}} { set Lc 1 } ; if {$Rc=={}} { set Rc 1 }
+
+            # Rewrite line list: ONCE!  ('foreach' keeps READING the original)
+            # Also stops flushing ALL 'Unified' file-header lines 
+            if {$hdr < 0} { set hdr [llength [set var [list]]] }
+
+        } { # Skip 'context'/'identical' lines (but decrement from counts)
+            #   (or just categorically skip ALL the fileheader nonsense)
+            if {[set mrk [string index $ln 0]]==" " && $hdr >= 0} {
+                # But if any REAL lines INTERVENED, make THOSE a 'Normal' hunk
+                if {$typ != {}} {
+                    set Rsiz [expr [llength $var] - $hdr - $ofst]
+                    set                  Nhdr      [expr {$typ=="a" ? $L-1:$L}]
+                    if {$ofst>1} {append Nhdr ","  [expr $L+$ofst-1]}
+                                  append Nhdr $typ [expr {$typ=="d" ? $R-1:$R}]
+                    if {$Rsiz>1} {append Nhdr ","  [expr $R+$Rsiz-1]}
+
+                    set var [linsert $var $hdr $Nhdr]
+                    incr L $ofst ; incr R $Rsiz ; set typ {}
+                }
+                incr L ; incr Lc -1 ; incr R ; incr Rc -1 ; continue
+            } elseif {$hdr < 0} { continue }
+
+            # Found a marked line to post; Perhaps begin a NEW 'Normal' hunk ?
+            if {$typ=={}} { set hdr [llength $var] ; set ofst 0 }
+
+            # Assign WHERE the (+/-) line goes (and detect overall hunk type)
+            switch -- "$mrk" {
+            "+" {   if {$typ=="c" || $typ=="d"} { set typ "c" } { set typ "a" }
+                    lappend var [string repl $ln 0 0 ">"]
+                    incr Rc -1
+            }
+            "-" {   if {$typ=="c" || $typ=="a"} { set typ "c" } { set typ "d" }
+                    set var [linsert $var $hdr+$ofst [string repl $ln 0 0 "<"]]
+                    incr Lc -1
+                    incr ofst
+            }}
+
+            # If both 'Unified' counts hit zero HERE, install final 'Normal'
+            #   header (only NEEDED when current (+/-) line has NO trailing
+            #   context BECAUSE it was the LAST PHYSICAL LINE of ENTIRE FILE)
+            if {!($Lc+$Rc) && $typ!={}} {
+                # Assemble VERY LAST "Normal" hdr
+                set Rsiz [expr [llength $var] - $hdr - $ofst]
+                set                  Nhdr      [expr {$typ=="a" ? $L-1:$L}]
+                if {$ofst>1} {append Nhdr ","  [expr $L+$ofst-1]}
+                              append Nhdr $typ [expr {$typ=="d" ? $R-1:$R}]
+                if {$Rsiz>1} {append Nhdr ","  [expr $R+$Rsiz-1]}
+
+                # (can ignore any POST-hdr numbering fixups - unneeded)
+                set var [linsert $var $hdr $Nhdr"]
+                incr L $ofst ; incr R $Rsiz ; set typ {}
+            }
+        }
+    }
+}
+
+###############################################################################
 # Set the X cursor to "watch" for a window and all of its descendants.
 #
 # An optional msg 'WHY' will post to the status area (when BOTH exist); if the
@@ -9821,7 +10612,7 @@ proc restore-cursor {} {
 # Check if error was thrown by us or unexpected
 ###############################################################################
 proc check-error {result output} {
-    global g errorInfo
+    global errorInfo
 
     if {$result && $output != "Fatal"} {
         error $result $errorInfo
@@ -9829,18 +10620,30 @@ proc check-error {result output} {
 }
 
 ###############################################################################
-# Recalc the current diff (optionally FORCING) the semantic [preference] reason
+# Recalc current diff (and optionally ALIGN) the semantic [preference] reason
 # Attempt to return to the same diff region, numerically speaking.
 #   (used to force a redo when a changed semantic could AFFECT the Diff result)
 ###############################################################################
-proc reCalcD {reason {onoff {}}} {
-    global g opts finfo
+proc reCalcD {reason {RevAlgn {}}} {
+    global g tmpopts opts finfo
 
-    # Optionally permits forcing a preference setting
-    if {$onoff != {}} {
-        set opts($reason) $onoff
+    # Optionally permits REVERSE-aligning the preference setting
+    #   N.B> used in odd situation where invoked by MENU instead of Pref Dialog
+    #       Prevents DIALOG from REACTING to anything CHANGED....
+    #
+    #       ...doing tmpopts/opts assignments in the REVERSE ORDER nullifies
+    #       many NORMAL "validation" operations by effectively triggering on
+    #       the TRAILING EDGE (when making them IDENTICAL) instead of the
+    #       LEADING EDGE (when they first DIVERGE). Its all about which Var is
+    #       PHYSICALLY being watched (ie. tmpopts within the Dialog).
+    if {$RevAlgn eq "RevAlgn"}  {
+        set tmpopts($reason) $opts($reason)
+        if {$reason=="ignSuprs"} {
+            set tmpopts(diffcmd) [set opts(diffcmd) [formOpts egnCmd]]
+        }
     }
 
+    # Just go DO the Diff
     set  ndx(1) [set ndx(2) [expr {$finfo(fCurpair) * 2}]]
     incr ndx(1) -1
     #N.B> Silently ignored IFF subject data is missing (SCM untried or failed)
@@ -9857,28 +10660,27 @@ proc reCalcD {reason {onoff {}}} {
 # Wipe most everything (data plus widget content), then kick off a rediff
 ###############################################################################
 proc do-diff {} {
-    global g w opts errorInfo
-
-    # Vertical scrolling is responsible for WATCHING what hunks are actually
-    # VISIBLE onscreen - as such it REQUIRES we have correct line-numbering
-    # info ('g(scrINF,$hid)' datums). They dont EXIST during the period where
-    # we are actively performing a Diff and interpreting its results!
-    #   By 'locking out' the proc that monitors textwin/scrollbar communication 
-    # we PREVENT premature attempts at LOOKING for such datums until they exist
+    global g tmpopts opts
 
     wipe-window
 
     watch-cursor
     update idletasks
-    unset -nocomplain g(redoDiff) ;# Cancel any PENDING redo (see prefapply)
+
+    # If we are HERE and there is a DEFERRED Diff pending, its clearly time
+    # to STOP deferring - in fact, that deferral REASON should now become
+    # "Apply"d (as the user was SUPPOSED to have done before now). This ensures
+    # the RESULTS of the Diff AGREE with the settings CURRENTLY provided.
+    if {[info exists g(deferD)]} {
+        foreach key $g(deferD) { set opts($key) $tmpopts($key) }
+        unset g(deferD) ;# Then Cancel any PENDING redo (see prefapply)
+    }
 
     set result [catch { rediff } output]
 
     check-error $result $output
 
-    if {$g(mergefileset)} {
-        do-show-merge 1
-    }
+    if {$g(mergefileset)} { do-show-merge 1 }
     restore-cursor
 }
 
@@ -9965,7 +10767,7 @@ proc main {} {
             set hlfg "#ffffff"
             #set w(selcolor) $hlbg
             if {$tk_version >= 8.5} {
-                option add *Menu.selectColor $w(foreground)
+                option add *Menu.selectColor $w(fgnd)
                 option add *Checkbutton.selectColor ""
                 option add *Radiobutton.selectColor ""
             } else {
@@ -10247,13 +11049,13 @@ proc newDiff {} {
         set w(newDiff,FSpec1) \
         [entry $fSpec.e1 -textvariable finfo(f,1) -vcmd {scm-updat scm1 %W %P}]
         entry $fSpec.er1 -textvariable finfo(rev,1) \
-                      -vcmd [list occupancy [label $fSpec.lr1 -text "-r"] %P]
+                     -vcmd "verify occupancy [label $fSpec.lr1 -text "-r"] %P"
 
         label $fSpec.l2  -text "FSpec 2:"
         set w(newDiff,FSpec2) \
         [entry $fSpec.e2 -textvariable finfo(f,2) -vcmd {scm-updat scm2 %W %P}]
         entry $fSpec.er2 -textvariable finfo(rev,2) -validate key \
-                      -vcmd [list occupancy [label $fSpec.lr2 -text "-r"] %P] 
+                     -vcmd "verify occupancy [label $fSpec.lr2 -text "-r"] %P" 
         $fSpec.er1 configure -validate key ;# allow validation AFTER .er2 exists
         $fSpec.er1 validate
         $fSpec.er2 validate
@@ -10261,7 +11063,7 @@ proc newDiff {} {
         label $fSpec.lA -text "Ancestor:"
         entry $fSpec.eA -textvariable finfo(f,0) -vcmd {scm-updat lckR %W %P}
         entry $fSpec.erA -textvariable finfo(rev,0) -validate key \
-                      -vcmd [list occupancy [label $fSpec.lrA -text "-r"] %P]
+                     -vcmd "verify occupancy [label $fSpec.lrA -text "-r"] %P"
         $fSpec.erA validate
 
         set mrgopt [frame $fSpec.f4] ;# pre-pack all this
@@ -10348,7 +11150,7 @@ proc newDiff {} {
 
         set options [frame $w(newDiff).options -bd 2 -relief groove]
 
-        button $options.more -text "More" -command open-more-options
+        button $options.more -text "More" -command {newDiffHidn opn}
 
         checkbutton $options.cflct -text "input is Conflict format" \
                                                     -var g(conflictset)
@@ -10460,7 +11262,7 @@ proc scm-updat {subcmd wdg val {recurs 0}} {
             if {[file isdir $val] && [file isdir $finfo(f,$Other($ndx))]} {
                 if {![winfo ismapped $Recursv]} { grid        $Recursv }
             } { if { [winfo ismapped $Recursv]} { grid remove $Recursv }   }
-            alignState $Recursv [expr {[string trim $opts(fRecurs)]!={}}]
+            alignState $Recursv [expr {[string trim $opts(egnSrchCmd)]!={}}]
 
             # Finally, if the data happens to be a Rev-carrying URL we
             # need to lockout the user from its version-widget. Sadly, TCL
@@ -10530,46 +11332,15 @@ proc scm-updat {subcmd wdg val {recurs 0}} {
     }
 }
 
-
 ###############################################################################
-# Disables the LABEL (wdg) when the ENTRY value (newV) is empty ...
-#   (primarily a GUI feedback trick to discern an EMPTY field from BLANKS)
-#
-# BUT also used to monitor the main PAIR of Rev entry-widgets to warn the user
-# about using #2 w/o using #1 (because 'assemble-args' would then IGNORE #2)
+# Expand/contract window to access lesser-used features of the NewDiff dialog
 ###############################################################################
-proc occupancy {wdg newV} {
-
-    # (grab the instance number of widget - doesn't apply when there ISNT one)
-    if {[string is digit [set ndx [string index $wdg end]]]} {
-        set Other([set Other(2) 1]) 2   ;#  (a simple meta-pgm identity value)
-
-        # And then derive meta-addressable names for BOTH entry widgets
-        set W($ndx) [file rootname $wdg][string map {l e} [file ext $wdg]]
-        set W($Other($ndx)) [string replace $W($ndx) end end $Other($ndx)]
-
-        # finally adjusting the bkgnd of #2 if it is USED when #1 is empty
-        if {($ndx==2 && "$newV" != "" && ![$W(1) index end]) \
-        ||  ($ndx==1 && "$newV" == "" &&  [$W(2) index end])} {
-            $W(2) configure -bg Tomato
-        } else {
-            $W(2) configure -bg [$W(1) cget -bg]
-        }
-    }
-
-    # Simple check of the entry value determines STATE of its (provided) label
-    if {[string length $newV]} {
-        $wdg configure -state normal
-    } else {
-        $wdg configure -state disabled
-    }
-    return true ;# validation is ALWAYS true - we are monitoring only
-}
-
-proc open-more-options {} {
-    global w
+proc newDiffHidn { opncls } {
+    global g w finfo
 
     set W $w(newDiff).options
+    switch $opncls {
+    "opn" {
     grid $W.cflct -row 0 -column 2 -sticky w
     grid $W.ml    -row 1 -column 1 -sticky e
     grid $W.me    -row 1 -column 2 -sticky nsew -pady 4 -padx {0 4}
@@ -10577,24 +11348,20 @@ proc open-more-options {} {
     grid $W.l1e   -row 2 -column 2 -sticky nsew -pady 4 -padx {0 4}
     grid $W.l2l   -row 3 -column 1 -sticky e
     grid $W.l2e   -row 3 -column 2 -sticky nsew -pady 4 -padx {0 4}
-
     grid columnconfigure $W 2 -weight 1
 
-    $W.more configure -text "Less" -command close-more-options
+        $W.more configure -text "Less" -command {newDiffHidn cls}
     update
-}
-
-proc close-more-options {} {
-    global g w finfo
-
-    set W $w(newDiff).options
+    }
+    "cls" {
     grid remove $W.cflct $W.ml $W.me $W.l1l $W.l1e $W.l2l $W.l2e
 
     # Zap everything as we close (yes, the last 3 get "")
     lassign {0 0} g(conflictset) g(mergefileset) g(mergefile) \
                                     finfo(ulbl,1) finfo(ulbl,2)
 
-    $W.more configure -text "More" -command open-more-options
+        $W.more configure -text "More" -command {newDiffHidn opn}
+    }}
 }
 
 ###############################################################################
@@ -11630,7 +12397,7 @@ proc rpt-gen {subcmd args} {
 ###############################################################################
 # Report the version of wish
 ###############################################################################
-proc about_wish {} {
+proc about-wish {} {
     global tk_patchLevel
 
     set version $tk_patchLevel
@@ -11644,7 +12411,7 @@ proc about_wish {} {
 ###############################################################################
 # Report the version of diff
 ###############################################################################
-proc about_diff {} {
+proc about-diff {} {
 
     set whichdiff [auto_execok diff]
     if {[llength $whichdiff]} {
@@ -11834,7 +12601,7 @@ In the second form(2), either or both <cmp>FILESPEC</cmp>s may be to a local\
       One last point - if the button displays as <bld>disabled</bld> (regardless\
       of showing as <itl>activated</itl>) it will not function, and is simply\
       reminding you that the needed preference setting\
-      ("<itl>$pref(fRecurs)</itl>") has not yet been established. See the\
+      ("<itl>$pref(egnSrchCmd)</itl>") has not yet been established. See the\
       <btn>Help</btn> topic <btn>On Preferences</btn> for further details.
 
 In the third form(3), a single <cmp>FILE</cmp> containing "conflict markers"\
@@ -11858,23 +12625,34 @@ The fourth form(4) is conditional on $g(name) being able to detect a viable SCM\
       suggested in this form as syntactically possible. The determining\
       factor (as to accessing the interactive dialog or not) is controlled by\
       the preference setting '<itl>$pref(autoSrch)</itl>', more fully\
-      described in the "On Preferences" Help page.
+      described in the <btn>Help</btn> topic <btn>On Preferences</btn> page.
       Remember that besides the explicit specification of <cmp>REV</cmp>\
       arguments, $g(name) interprets a LACK of TWO <cmp>Fspec</cmp>s as an\
-      <itl>implicit</itl> request for additional assistance from an SCM.
+      <itl>implicit</itl> request for additional assistance from an SCM. Under\
+      certain circumstances, this presumption might <itl>not</itl> be what was\
+      INTENDED, leading to complaints of "insufficient input", where the REAL\
+      issue is that $g(name) has detected a <itl>potential</itl> SCM which\
+      then FAILED to locate a tracked file, where what was DESIRED was to\
+      treat the <cmp>FSPEC</cmp>s as just FILES (or DIRECTORIES) which in this\
+      circumstance, can only be accomplished by adjusting the setting\
+      "<itl>$pref(scmPrefer)</itl>" to tell $g(name) to ignore the detected\
+      SCM, OR using the <btn>New...</btn> dialog to prefer the pseudo SCM\
+      setting "None". See the section "Source Code Management" below concerning\
+      further details on how SCMs are detected.
 
 <hdr>User Preferences</hdr>
 Practically everything in $g(name) is customizable and as such, those settings\
       are paramount to making the most of what can be done with its usage.\
-      While $g(name) comes reasonably configured out of the box,\
-      personalization to your taste, or even to a given Projects expectations\
-      are all reasons why just ONE set of customizations may be insufficient.\
-      You might wish to review the details (in the "On Preferences" Help page)\
-      of how to adjust your runtime environment to take advantage of the\
-      capability to have MORE than just <bld>A</bld> personal Preference file.
-      Note that as delivered, $g(name) will <bld>not</bld> provide this feature\
-      until the specific configuartion action is taken by the user,\
-      as described on that page.
+      While $g(name) comes reasonably configured out of the box (specifically\
+      for the "Diff" engine), personalization to your own taste, or even to a\
+      given Projects expectations are all reasons why just ONE set of\
+      customizations may be insufficient.
+      You might wish to review the details (in the <btn>Help</btn> topic\
+      <btn>On Preferences</btn> page) of how to adjust your runtime environment\
+      to take advantage of the capability to have MORE than just a\
+      <bld>single</bld> personal Preference file. Note that as delivered,\
+      $g(name) does <bld>not</bld> provide this feature until the specific\
+      configuration action is taken by the user, as described on that page.
 
 <hdr>Source Code Management</hdr>
 In all the SCM forms, $g(name) will detect which SCM system(s) are possible.\
@@ -11892,13 +12670,22 @@ In all the SCM forms, $g(name) will detect which SCM system(s) are possible.\
       <cmp>FILESPEC</cmp> directory or any of its ancestor directories, which\
       is also how .git and .svn are searched.
       It is important to recognize that several detections are based on the\
-      provided FILESPEC(s), or alternately the "<bld>C</bld>urrent\
+      provided <cmp>FSPEC</cmp>(s), or alternately the "<bld>C</bld>urrent\
       <bld>W</bld>orking <bld>D</bld>irectory" (CWD) where $g(name) was\
-      invoked, and at times, BOTH. Often this can necessitate invoking\
+      invoked, and at most times, BOTH. Often this can necessitate invoking\
       $g(name) from <itl>within</itl> the "Sandbox" (a synonym for "WC")\
       which are the actual files and directories that the specific SCM is\
       actively tracking. This implicit use of the CWD is often instrumental in\
       making a given SCM interaction not only detectable, but functional.
+      On the other hand, often depending on the specific SCM involved, this\
+      tendency to detect an SCM from its FSPEC pathname, or the CWD can IMPLY a\
+      SCM where one was not WANTED. This is why the <itl>$pref(scmPrefer)</itl>\
+      preference provides a special value of "<bld>None</bld>"; effectively\
+      preventing the detection when it was not wanted in the first place. Just\
+      know that this flag is available as <itl>either</itl> an actual\
+      preference (used every time) or as a ONE-TIME override (via its selection\
+      from the <btn>New...</btn> dialog). In practice, the dialog approach is\
+      often the simpler mechanism to use.
 
 <cmp>REV1</cmp> and <cmp>REV2</cmp>, when given, must be a valid revision value\
       for <cmp>FILESPEC</cmp>. When the SCM system (RCS, CVS, etc.) is detected\
@@ -11912,8 +12699,9 @@ In all the SCM forms, $g(name) will detect which SCM system(s) are possible.\
       revision format were to be something interprettable by that SCM as\
       universally applicable, such as a "date".
 
-Revision values are generally peculiar to a specific SCM. For example, a Git <cmp>REV</cmp>\
-(see manpage for  git-rev-parse) offers several unusual variations:
+Revision values are generally peculiar to a specific SCM. For example, a Git\
+      <cmp>REV</cmp> (see manpage for  git-rev-parse) offers several unusual\
+      variations:
      <cmp>FILE</cmp>                 [compare with <cmp>HEAD</cmp> by default]
   -r <cmp>HEAD</cmp> <cmp>FILE</cmp>        [compare with <cmp>HEAD</cmp>]
   -r <cmp>HEAD^</cmp> <cmp>FILE</cmp>      [compare with parent of <cmp>HEAD</cmp>]
@@ -12080,8 +12868,12 @@ With regard to inferred SCM revision fields, invoking $g(name) with no viable\
       arguments at all <itl>MAY</itl> result in <itl>either</itl> an SCM\
       trying to supply such args <bld>OR</bld> presenting the interactive\
       dialog. However, when an SCM <itl>is</itl> detected and searched, but\
-      results in not <itl>finding</itl> any files to compare, only a\
-      termination message will be produced.
+      results in not <itl>finding</itl> any files to compare, often only a\
+      termination message will be produced. This is even MORE likely if\
+      $g(name) was started WITH ARGUMENTS from the commandline; whereas if it\
+      was initiated via the interactive <btn>New...</btn> dialog, $g(name)\
+      will issue the message and then TRY to return to the dialog to perhaps\
+      <itl>adjust</itl> the settings to values that DO function.
 
 It is <itl>NOT</itl> recommended to <bld>specify</bld> an\
       <cmp>ANCESTORFILE</cmp>, <cmp>MERGEOUTPUTFILE</cmp> or more than two\
@@ -12129,7 +12921,7 @@ The remaining options perform the following services:
       The mutually exclusive options <cmp>-1</cmp> and <cmp>-2</cmp> allow\
       one to suggest to $g(name) which side (Left or Right, respectively),\
       should be chosen <itl>during initial read-in</itl> as the contributing\
-      side for any diff region for which $g(name) cannot discern a reason\
+      merge side for any diff region for which $g(name) cannot discern a reason\
       (such as in a 3way ancestor-file situation) to choose one versus the\
       other. Oftentimes the intent of the merge (back porting, etc.) and\
       the order of files on the command line can dictate which file should\
@@ -12140,11 +12932,11 @@ The remaining options perform the following services:
       files did <bld>not</bld> turn out as you expected; simply invoke\
       <btn>New...</btn> Diff, flip the setting and allow $g(name) to redo that\
       difference computation, then proceed to make the fewer number of needed\
-      choice assignments. Debug output (<cmp>-d</cmp>), while not really meant\
-      for the average user, is simply mentioned here for completeness sake.\
-      When used, it produces somewhat cryptic textual output via the STDERR\
-      output stream showing significant status and/or mileposts with varying\
-      degrees of usefullness to those familiar with the $g(name) internals.
+      merge choice assignments. Debug output (<cmp>-d</cmp>), while not really\
+      meant for the average user, is simply mentioned here for completeness\
+      sake. When used, it produces somewhat cryptic textual output via the\
+      STDERR output stream showing significant status and/or mileposts with\
+      varying degrees of usefullness to those familiar with $g(name) internals.
 
 <hdr>Network latency</hdr>
 $g(name) does not, itself, require network access to run. However, certain\
@@ -12172,18 +12964,43 @@ Although $g(name) was designed as a frontend to the classic, UNIX derived,\
       its input/output and invocation requirements cannot be used. Because of\
       this, $g(name) can be configured to interoperate with other differencing\
       engines, some having perhaps more advanced (or desireable) detection\
-      methods. The primary requirement for such engines is it must produce what\
-      GNU Diff calls "<bld>normal</bld>" diff output format (NOT "Unified").
+      methods. Prior to $g(name) V5.5, the primary requirement for such engines\
+      was it must produce what GNU Diff called "<bld>normal</bld>" diff output\
+      format (NOT "Unified" NOR "Context"). This is <bld>NO LONGER TRUE</bld>.\
+      $g(name) now accepts <bld>Unified</bld> format automatically with no\
+      further user action required ("Context" remains unsupported).
+      With regard to telling the Engine what optional features it should\
+      perform, $g(name) always communicated these via "comand line options"\
+      and still does, although it has become more formalized via an Engine\
+      configuration section added to, and described in, the\
+      <btn>On Preferences</btn> topic of <btn>Help</btn>. This should be\
+      consulted for details when deciding to use an Engine OTHER than the\
+      default UNIX-derivative "DIFF" command.
+      Because this "option flag" method is ALSO how one invokes $g(name), it\
+      is POSSIBLE for options intended for the Engine to be supplied via the\
+      $g(name) command line as a simple way to augment the operation of the\
+      current $g(name) session. The only requirements are it needs to be a flag\
+      that $g(name) does not, itself, recognize AND must parse as a SINGLE-WORD!
       Accordingly, any option flag having a leading dash that is <itl>not</itl>\
-      recognized as a $g(name) option is passed <itl>almost untouched</itl>\
+      recognized as a $g(name) option is passed <itl>virtually untouched</itl>\
       to your Diff engine of choice. This "pass through" feature permits you to\
       <itl>temporarily</itl> alter the way the Diff engine is called,\
       <itl>for the entire session</itl>, without resorting to a change in your\
-      preferences file. However it also means that to use, for example, the\
-      "-d" option for GNU diff (which <itl>is</itl> a $g(name) option), you\
-      would need to pass it using its long-form equivalent of "--minimal" (to\
-      avoid the mis-interpretation).
-      But as a related issue, trying to pass <itl>any</itl> option that\
+      preferences file or settings. However it also means that to use, for\
+      example, the "-d" option for GNU diff (which <itl>is</itl> a $g(name)\
+      option), you would need to pass it using its long-form equivalent of\
+      "--minimal" (to avoid the mis-interpretation).
+      Just be aware, that should you make preference changes that ALTER the\
+      use of ANY flags currently being passed from $g(name) TO the Engine,\
+      this special "pass thru" option will be <bld>removed</bld> and no longer\
+      in force, UNLESS specifically re-enterred via the preferences dialog.\
+      The best way to think of this, is to believe that specifying a random\
+      option from the $g(name) command line is EQUIVALENT to having added it\
+      to the current session VIA the preference dialog - and thus any FURTHER\
+      preference changes (related to the options PASSED to Diff) is simply\
+      responding to your new changes (which never knew the temporary option\
+      was ever present).
+      BUT as a related issue, trying to pass <itl>any</itl> option that\
       requires a <bld>value</bld> <itl>MAY</itl> necessitate an unusual form\
       of quoting to preserve syntactically required "white space" characters.\
       As noted earlier, if the value portion has NO blanks and is permitted to\
@@ -12213,17 +13030,24 @@ Note in each case, the quoting of BOTH the flag and its value\
       where potential "substitutions" are to be avoided. Without this 'extra'\
       quoting as shown, $g(name) <itl>would pass</itl> the option, but the\
       resulting Diff would <itl>MISS</itl> the trailing blank of the value.
-      The reason is primarily that $g(name) <itl>has no understanding</itl> of\
-      any flags being passed to the engine, nor if they might legitimately\
-      require a value, or need said value to be separated from its flag while\
-      still <itl>preserving</itl> any embedded blanks.
-      IMPORTANT NOTE - from a $g(name) perspective, this specific GNU Diff\
+      The reason is primarily that $g(name) <itl>has no true syntactic\
+      understanding</itl> of nearly ANY flags being passed to the engine, nor\
+      if they might legitimately require a value, or need said value to be\
+      separated from its flag while still <itl>preserving</itl> any embedded\
+      blanks. Yet, certain flags ARE understood (notably the classic Engine\
+      options that deal with difference suppressions) and are provided for by\
+      the <btn>Engine</btn> configuration section of the preference settings,\
+      to address these specific syntactic concerns. Recommended reading!
+
+      IMPORTANT NOTE - from a $g(name) perspective, this example GNU Diff\
       option should <bld>never</bld> be passed to <bld>ANY</bld> diff engine\
       ... it was designed to make the <itl>direct output of Diff itself</itl>\
       more meaningful to a <itl>human</itl> by simply suppressing what is,\
-      in reality, actual differences. $g(name) <bld>will fail badly</bld> if\
-      you were to perhaps <itl>sneak</itl> the option to Diff (using its\
-      long-form flag name). You have been warned.
+      in reality, actual differences. Besides, the <itl>functionality</itl>\
+      can be PROVIDED by $g(name) itself (VIA the recognized "-I" flag).\
+      $g(name) <bld>will fail badly</bld> if you were to perhaps\
+      <itl>sneak</itl> THIS option to Diff (using its long-form flag name).\
+      You have been warned.
     }
 
     set usage [subst -nobackslashes -nocommands $usage]
@@ -12315,8 +13139,20 @@ Following all these <itl>MAY</itl> be an optional two line window called the\
 
 At the bottom of the main display is the Status bar, where tool activity and/or\
       informational messages of various sorts will display from time to time.\
-      At the far right edge of this bar, is a dedicated display of the number\
-      of difference regions that presently exist (& if any, which is "current").
+      At the far right edge of this bar, are two dedicated displays; the first\
+      is a stylized count of the number of merge choices that presently select\
+      either the Left or Right version of each Diff Region. These values will\
+      be modifed as choices are made within the tool. As such, it serves to\
+      suggest how much MERGE work is at potential risk of loss, should a NEW\
+      execution of "Diff" take place.
+      The second is a COUNT of the regions that presently exist (and if any,\
+      which region is "current" - ie. the "<bld>CDR</bld>"). The SUM of the\
+      Left/Right merge choices at times <itl>may not</itl> equal the TOTAL of\
+      all regions, as some regions COULD be set to select BOTH sides, which is\
+      NOT counted. The merge counts are additionally a reminder of which side\
+      is providing the bulk of the merge selections, which might signal the\
+      need to toggle the "<itl>$pref(predomMrg)</itl>" preference, BEFORE\
+      expending the time to review and make individual selections.
 
 All difference regions (DRs) are <itl>typically</itl> highlighted to set them\
       apart from the surrounding text, unless the "<btn>$pref(tagtext)</btn>"\
@@ -12455,7 +13291,7 @@ The <btn>New...</btn> item displays a dialog where you may choose two files\
 
 This menu is organized into a few sections, the first of which deals with\
       how the output from the diff engine can be tuned or interpretted.\
-      <btn>Ignore White Spaces</btn> toggles whether certain user preference\
+      <btn>Utilize Suppressions</btn> toggles whether certain user preference\
       defined options should (or not) be used when invoking Diff. Both of\
       <btn>Ignore Blank Lines</btn> and <btn>Ignore RE-matched Lines</btn>\
       in turn, toggle an ability to suppress (basically NOT notice or\
@@ -12466,7 +13302,9 @@ This menu is organized into a few sections, the first of which deals with\
       IMPORTANT: toggling <itl>any</itl> of these settings will cause $g(name)\
       to <itl>immediately</itl> re-invoke the diff engine so as to provide\
       the requested interpretation. This <bld>will cause the loss</bld> of\
-      any merge work that may have been in progress at that time.
+      any merge work that may have been in progress at that time. For this\
+      reason, when the keyboard or mouse is positioned to select any of them,\
+      they will be highlighted to remind you of this impending loss.
       In the second section are items controlling what information gets\
       displayed within the tool itself. Both <btn>$pref(showln)</btn> and\
       <btn>$pref(showcbs)</btn> toggle the display of line numbers and\
@@ -12541,7 +13379,7 @@ The <btn>About $g(name)</btn> item displays copyright and author\
 The Popup menu is generally available over the majority of individual windows\
       comprising the "Left/Right" aspects of the overall display, activated by\
       the, so-called "menu" button of the mouse. Each of the operations it\
-      provides is available elsewhere, although it can be convenient to have
+      provides is available elsewhere, although it can be convenient to have\
       the mechanisms "close by" during operation. It is a "context sensitive"\
       menu in that not every operation is ALWAYS available, depending on WHERE\
       the original popup request was made. Yet each item still performs the\
@@ -12551,7 +13389,7 @@ The Popup menu is generally available over the majority of individual windows\
       others such as Find, Edit and "Copy Selection" (to the clipboard), along\
       with the earlier discussed "Find Nearest Diff". Just dont expect to ask\
       to "Edit" one of the files, when popped-up over the Diff Map... you NEED\
-      the context (where you popped-up) to hint at which SIDE, thus which file,
+      the context (where you popped-up) to hint at which SIDE, thus which file,\
       is being requested!
 
 8. From the toolbar:
@@ -12750,8 +13588,8 @@ $g(name) can output various textual forms of the same data as viewed in the\
       regardless of your simply "taking" the default or typing (or RE-typing)\
       a replacement, $g(name) will verify that the name provided is "safe" to\
       write to, meaning that if it refers to an <bld>existing</bld> file,\
-      you will be given the opportunity change or confirm it via the provided\
-      file browser window.
+      you will be given the opportunity to change or confirm it via the\
+      provided file browser window.
 
 <hdr>Diff Map</hdr>
 
@@ -12801,10 +13639,11 @@ To merge the two files, go through the difference regions (via <btn>Next</btn>,\
       <btn>L</btn> (for "Left") or <btn>R</btn> (for "Right"), located\
       adjacent to the toolbar <bld>Merge:</bld> label, assigning which side\
       should be used for each. Alternately, the "<bld>1</bld>" & "<bld>2</bld>"\
-      hotkeys will do the same, respectively. The initial selections (after\
-      invoking Diff) will have already been established by a user preference\
-      and/or whether a 3way (involving an ancestor file) was performed\
-      (explained further in the section "<bld>3way merging</bld>" below).
+      (default) hotkeys will do the same, respectively. The initial selections\
+      (after invoking Diff) will have already been established by a user\
+      preference and/or whether a 3way (involving an ancestor file) was\
+      performed (explained further in the section "<bld>3way merging</bld>"\
+      below).
       Selecting <btn>L</btn> means that the the left-most file's version of\
       the difference will be used in creating the final result; choosing\
       <btn>R</btn> means that the right-most file's difference is used. Each\
@@ -12833,13 +13672,13 @@ Oftentimes, you may find that the "Diff" engine has packed several lines\
       can have its Left or Right side chosen for merging at any one time.\
       As a side note, "context" and "unified" diff output formats tend\
       to exacerbate this problem, and is part of the reason we dont generally\
-      like them as an input format, although we <itl>may</itl> consider\
-      automatically deconstructing them sometime in the future. Nevertheless,\
-      this is the "problem" that <btn>Split</btn> or <btn>Combine</btn> are\
-      intended to address. Using these tools, you will be permitted to\
-      repartition the exact lines that should be treated as a distinct\
-      difference region. In each case, you start from some specific CDR,\
-      and then either break it apart into smaller pieces ("Split") or\
+      like them as a data format, although we <itl>DO</itl> allow them,\
+      automatically deconstructing them into the equivalent "normal" format.\
+      Nevertheless, this is the "problem" that <btn>Split</btn> or\
+      <btn>Combine</btn> are intended to address. Using these tools, you will\
+      be permitted to repartition the exact lines that should be treated as\
+      a distinct difference region. In each case, you start from some specific\
+      CDR, and then either break it apart into smaller pieces ("Split") or\
       reassemble it ("Combine") at line boundaries of your choice.
       A dialog window is provided to oversee the movement of the CDR boundary\
       edges, with feedback provided in the Text windows. You need only to\
@@ -13003,9 +13842,9 @@ Or directly into the Discussion forum at
     do-text-info .help $title [subst -nobackslashes -nocommands $text]
 }
 
-######################################################################
+###############################################################################
 # display help on the preferences
-######################################################################
+###############################################################################
 proc help-prefs {} {
     global g pref
 
@@ -13080,106 +13919,66 @@ As hinted earlier, you may view, edit, locally apply and even save preferences\
       used for apportioning horizontal space among the Left and Right windows.
       Be aware though, that <itl>certain</itl> preferences, when subsequently\
       <btn>Apply</btn>ed, will cause $g(name) to immediately re-invoke "Diff",\
-      which will <bld>reset</bld> any <itl>UN-SAVED</itl> interactive work\
+      which will <bld>destroy</bld> any <itl>UN-SAVED</itl> interactive work\
       (specifically any merge choices, "Ignore"d or "Split/Combine"d CDRs)\
       to their initial states.
 
 The following descriptions will, among other things, identify which of them\
       can exhibit this behavior; yet the characteristic each has in common\
-      is that they somehow involve the "<itl>interpretation</itl>" of the Diff\
-      <bld>results</bld> (eg. blank-handling, ignores, etc.). However, as a\
+      is that they somehow involve either the "<itl>formulation</itl>" of the\
+      Diff command itself, or the "<itl>interpretation</itl>" of its\
+      <bld>results</bld> (eg. blank-handling, ignores, etc.). To remind you\
+      of the potential penalty involved, whenever a preference modification is\
+      made that would <bld>lead</bld> to an inevitable Diff INVOCATION,\
+      both individual items AND the <btn>Apply</btn> button will become\
+      highlighted. You may, of course, proceed at your own risk. However, as a\
       safety net, should an <btn>Apply</btn> happen to encounter a "reverted"\
-      setting due to problems and ALSO detect the need to <btn>Rediff</btn>,\
+      setting due to problems and ALSO note the need to <btn>Rediff</btn>,\
       $g(name) will <bld>suspend</bld> that need and instead allow you to\
       <itl>repair</itl> the failed settings. Besides a popup message to that\
       effect, the <btn>Apply</btn> button itself will flash RED (briefly) upon\
-      detecting ANY errors (for which you will have been shown messages).\
-      Conversely, if applying the settings has been successful, the button\
+      detecting ANY errors (for which you will have already been notified).\
+      Conversely, if applying all settings has been successful, the button\
       flash will be GREEN, in addition to any <itl>possibly</itl> visible\
       changes you may observe in the main windows from your new settings.
 
-Preferences are organized onscreen into FOUR categories: General, Display,\
-      Behavior and Appearance. Yet, in the resulting file, they are kept in\
-      alphabetical order of the preference identifier key. But EACH will have\
-      the same descriptive labels (on screen, in this Help, or as a comment in\
-      the file). For the purposes here, they will be presented in their\
-      onscreen grouping and order.
+Preferences are organized onscreen into FIVE categories: General, Display,\
+      Behavior, Appearance and Engine. Yet, in the resulting file, they are\
+      kept in alphabetical order of the preference identifier key. But EACH\
+      will have the same descriptive labels (on screen, in this Help, or as a\
+      comment in the file). For the purposes here, they will be presented in\
+      their onscreen grouping and order.
 
 <hdr>General</hdr>
 
 <bld>$pref(diffcmd)</bld>
 
-This is the command that will be run to generate a diff of the two files.\
-      Typically this will be "diff"; yet other differencing engines, providing\
-      other algorithms are possible, given the constraints that it exhibit the\
-      same output syntax, return code semantics, and to a much lesser degree,\
-      command line formulation. When this command is run, the names\
-      of the two files to be diffed will be added as the last two arguments\
-      on the command line in left-to-right order.
-If the \"<itl>$pref(ignoreblanksopt)</itl>\" (described soon) is specified\
-      <itl>and</itl> enabled, it too will be included in the resulting command.
-
-<bld>$pref(fRecurs)</bld>
-
-Arguments to send with the Diff command causing it to search a given pair of\
-      directory <bld>trees</bld> recursively to locate all pairs of resultant\
-      files that contain differences. Each pair will be expected to be named\
-      identically as the search proceeds, except for the starting directories.
-      The decision to USE these arguments originates from either the command\
-      line (or the interactive dialog) and will only be effective when\
-      <bld>both</bld> given inputs <itl>ARE</itl> directories.
-      The default value provided (<bld>-r</bld> and <bld>-q</bld>) are both\
-      reasonable, but not necessarily ideal. First they <itl>presume</itl> the\
-      use of a GNU-like Diff Engine (to be understood to mean) "recursive" and\
-      "quiet" respectively. But the use of the "quiet" option implies how and\
-      what is eventually reported by the search. Using it, <itl>ALL</itl> like\
-      named files are reported, <itl>even when they do not appear to be Text\
-      files</itl>. This means your resulting file list can contain files that\
-      are KNOWN to be different, despite not being files that can be readily\
-      compared, or visually read, let alone reviewed, merged, etc.. Leaving\
-      the "quiet" option OUT, effectively results in <itl>suppressing</itl>\
-      any files that are considered (by the GNU Diff Engine, at least) to be\
-      <bld>binary</bld> (eg. non-text) from being returned as candidates.
-      This may be a better result, although possibly still not quite perfect.\
-      There are instances, of seemingly "Text-like" files, for which $g(name)\
-      might still be inappropriate. A Cscope database, for one, comes to mind.\
-      Thus you may wish to <bld>add</bld> yet <itl>more</itl> options here\
-      (such as the Gnu Diff <bld>-x</bld> or <bld>-X</bld> options) that tell\
-      the Engine to <bld>ignore</bld> specified filename patterns when\
-      searching for file pairs.
-      You should review the documentation for your configured Engine to\
-      determine if other available options might assist in "getting the desired\
-      results". $g(name) does not, itself, look at ANY of these option flags\
-      and simply sends them to the Engine when requesting a "recursive" search.\
-      HOWEVER - because the handling of the results <itl>returned</itl> by the\
-      Engine drives what then happens, it <bld>is possible</bld> that YOUR\
-      chosen Engine might not "report back" its results in a syntax\
-      intelligible to $g(name). If such is the case, contact us for assistance.
+This is the REAL command that will be run to create a diff of any two files.\
+      It is NOT a modifiable preference, at least not directly; It simply\
+      displays HOW the command is presently configuredi, to which $g(name) will\
+      append some pair of files. However, its "<itl>content</itl>" will respond\
+      to modifications made to OTHER pertinent preferences, including several\
+      that may reside in other sections of the dialog. As originally delivered,\
+      this will typically be "diff"; yet other differencing engines, providing\
+      other algorithms are possible.
+As this IS the prototype command $g(name) intends to invoke, when any implied\
+      modification occurs from manipulating OTHER preferences, the NEW value\
+      will be immediately highlighted, indicating that <btn>Apply</btn> WILL\
+      cause the newly configured command to be invoked. Should you need to\
+      review what the PRESENT value was BEFORE it was changed an hilighted,\
+      hovering the mouse over the item displays that value in the Status bar.
 
 <bld>$pref(xcludeFils)</bld>
 
-Just as the previous item suggested excluding files of certain names by\
-      providing extra arguments to Diff, $g(name) itself also provides a\
-      virtually identical capability. The distinction is simply that this\
-      preference should NOT specify any syntactic "keyword flag" for each\
-      pattern provided. Simply <itl>seperate</itl> each pattern with at least\
-      one space. Note that it doesn't matter if the pattern matches an actual\
-      FILE or any other NAMED entity during the search - when it matches, it\
-      is immediately skipped.
-
-<bld>$pref(ignoreblanksopt)</bld>
-
-Arguments to send with the diff command to tell it how to ignore whitespace.\
-      If you are using GNU diff, "-b" or "--ignore-space-change" ignores\
-      changes in the amount of whitespace, while "-w" or\
-      "--ignore-all-space" ignores all white space. Because of an unfortunate\
-      interaction with yet another option ("<bld>-B</bld>" which $g(name)\
-      itself handles) we currently <bld>require</bld> the use of the\
-      <itl>short</itl> argument names here.
-If this field is shown <itl>disabled</itl>, it can be accessed by toggling\
-      the \"<itl>$pref(ignoreblanks)</itl>\" option described below. Note that\
-      when this field <itl>is</itl> disabled, its value will be ignored,\
-      although it will still be retained.
+Whenever $g(name) is looking for file pairings within the file system, it first\
+      has to form candidate names, generally because the arguments it is\
+      working with are directories. This preference names one or more filename\
+      <itl>patterns</itl> which should NOT be considered for matching to produce\
+      a pairing. Simply <itl>seperate</itl> each pattern with at least\
+      one space, which implies the pattern itself CANNOT contain one. Note that\
+      it doesn't matter if the pattern matches an actual FILE or any other NAMED\
+      entity (eg. a directory) during the search - it is immediately skipped.
+      Provides some level of control over what files $g(name) SHOULD find.
 
 <bld>$pref(tmpdir)</bld>
 
@@ -13245,8 +14044,12 @@ An editable dropdown list of Regular Expressions that are used to identify text\
       momentarily whenever the list is actually modifed (and the entry will\
       then be returned to its empty-looking initial state).
       If the entire item is shown <itl>disabled</itl>, it can be accessed by\
-      toggling the \"<itl>$pref(ignoreRegexLn)</itl>\" option described\
+      toggling the "<itl>$pref(ignoreRegexLn)</itl>" option described\
       (shortly) below.
+      However, note that IF that option *remains* "set", any changes made to\
+      this table qualifies as a REASON to re-invoke a new Diff, and thus will\
+      result in the warning highlight, and the concommitant concerns about\
+      in-progress work.
 
 <bld>$pref(filetypes)</bld>
 
@@ -13274,19 +14077,17 @@ This defines the <itl>default</itl> size, in characters, of the two main text\
       making it <itl>larger</itl> than your screen; although doing so may make\
       general operations more difficult.
 
-<bld>$pref(ignoreblanks)</bld>
+<bld>$pref(ignSuprs)</bld>
 
-If <bld>set</bld>, then the above "<itl>$pref(ignoreblanksopt)</itl>" will\
-      be included whenever a diff is executed. It also permits that option\
-      to be editted.
-If <bld>unset</bld>, that same option will <itl>not</itl> participate in any\
-      Diff and is also disabled from being modified.
-You may toggle this setting simply to gain editting access to the\
-      "<itl>$pref(ignoreblanksopt)</itl>", but if you press <btn>Apply</btn>\
-      BEFORE toggling BACK to its <itl>original</itl> value (be that either\
-      <bld>set</bld> <itl>or</itl> <bld>unset</bld>), it will trigger an\
-      immediate "<btn>Rediff</btn>" which <bld>WILL DISCARD</bld> any\
-      transitory activity not yet finalized.
+If <bld>set</bld>, then whichever of the Engine-defined Suppressions are\
+      presently marked "active" are ADDED into the prototype "$pref(diffcmd)",\
+      obviously inducing that command to be changed, and (again) raising the\
+      issue of an impending "Diff" invocation and its warning highlight. This\
+      preference serves simply as a ON/OFF toggle to the suppression categories\
+      as a group, eliminating the need to toggle several items to accomplish\
+      the same result. Turning OFF all suppressions is an important step when\
+      making final merge choices, if INDENTATION in the final merged file is\
+      of any importance to you.
 
 <bld>$pref(autocenter)</bld>
 
@@ -13304,7 +14105,7 @@ If <bld>unset</bld>, no automatic centering will occur. However, the setting\
 
 If <bld>set</bld>, then $g(name) will not count, nor highlight, any region\
       that is exclusively comprised of empty (or possibly white space filled\
-      lines if the above \"<itl>$pref(ignoreblanksopt)</itl>\" is active)\
+      lines if the above "<itl>$pref(ignSuprs)</itl>" is active)\
       whenever a diff is executed. This essentially mimics a feature of the\
       original Diff program, but is performed entirely within $g(name).
 If <bld>unset</bld>, no special significance is attached to blank/empty lines\
@@ -13312,14 +14113,16 @@ If <bld>unset</bld>, no special significance is attached to blank/empty lines\
 Note if you press <bld>Apply</bld> AFTER changing this setting (either to\
       <bld>set</bld> <itl>or</itl> <bld>unset</bld>), it will trigger an\
       immediate "<btn>Rediff</btn>" which <bld>WILL DISCARD</bld>\
-      any transitory activity not yet finalized.
+      any transitory activity not yet finalized. As such, it is yet another\
+      instance of the warning highlight that precedes such action.
 Also note that when you choose to ignore empty lines, you are implicitly\
       saying that those affected lines <itl>will be retained</itl> in any\
       merged output <bld>exactly</bld> as they appearred originally in the\
       Left-hand text window. Note that for $g(name) to permit the DR to\
       <bld>be ignored</bld>, <itl>every line</itl> must be classified as such\
       <itl>regardless</itl> of the specific reason (ie. based on being BLANK,\
-      or as a result of matching any ONE Regular Expression - described above).
+      or as a result of matching any of the "<itl>$pref(ignoreRegexLnopt)</itl>"\
+      described earlier, provided THEY are active).
 
 <bld>$pref(autoselect)</bld>
 
@@ -13409,7 +14212,7 @@ This setting is actually a pair of values, describing which SCM you prefer to\
       reasons, besides this, for that possibility. Note however, that because\
       of subtle differences between the two ways of starting the tool: the\
       command line or the dialog, 'None' is generally <itl>ignored</itl> for\
-      command line uses, while it will behave as a <itl>preferred</itl> value\
+      command line uses, while it will behave as a <itl>override</itl> value\
       on the dialog, until the dialog is actually accepted.
 
 <bld>$pref(predomMrg)</bld>
@@ -13430,6 +14233,9 @@ This setting decides, for those cases where no specific reason (such as an\
       is used and there was no <itl>other</itl> reason to choose a side,\
       as every region must ultimately posess <itl>SOME</itl> setting prior to\
       being displayed.
+      As a reminder of the oftentimes lopsided contributions from ONE side\
+      versus the other, a status display of how MANY merges favor the Left\
+      versus the Right is maintained near the lower right corner of the display.
 
 <hdr>Display</hdr>
 
@@ -13513,9 +14319,10 @@ If <bld>set</bld>, show inline diffs in the main window. This is useful to\
       see what the actual diffs are within a large diff region.
 If <bld>unset</bld>, the inline diffs are neither computed nor shown. This\
       is the simpler method, where byte-by-byte comparisons\
-      are used.  However, this inline diff <itl>never</itl> honors\
-      any "<itl>$pref(ignoreblanksopt)</itl>" value, regardless of that\
-      option being enabled.
+      are used. This inline diff <itl>never</itl> honors\
+      any "<itl>$pref(ignSuprs)</itl>" value, regardless of that\
+      option being enabled; but see the following TWO preference (below) for\
+      a method to sidestep this limitation.
 
 <bld>$pref(showinline2)</bld>
 
@@ -13526,10 +14333,7 @@ If <bld>unset</bld>, the inline diffs are neither computed nor shown. This\
       results for source code and written text files.  This is the\
       Ratcliff/Obershelp pattern matching algorithm which recursively\
       finds the largest common substring, and recursively repeats on the left\
-      and right remainders.  However, this inline diff <itl>never</itl> honors\
-      any "<itl>$pref(ignoreblanksopt)</itl>" value, regardless of that\
-      option being enabled; but see the following preference (below) for\
-      a method to sidestep this limitation.
+      and right remainders.
 
 <bld>$pref(inlSuprs)</bld>
 
@@ -13542,8 +14346,8 @@ This is a collection of five distinct settings that collectively control what\
       recognize that some categories are actually subsets of one another and\
       turning ON one, can result in OTHER PRECEDENCE items being turned OFF.
 Each of the five is a <bld>suppression</bld> category that just happens to\
-      <bld>parallel</bld> the same five "<itl>$pref(ignoreblanksopt)</itl>"\
-      possible values that can be given to the Diff engine.\
+      <bld>parallel</bld> the same five Suppression values that can be\
+      configured for the Diff engine.\
       Thus if you manually <itl>ALIGN</itl> these INDIVIDUAL settings to\
       agree, you will SEE exactly why Diff chose the line as different.
       However, there are valid reasons to not always maintain this alignment,\
@@ -13558,7 +14362,7 @@ Each of the five is a <bld>suppression</bld> category that just happens to\
       <btn>#Blanks</btn> - AMOUNT of Whitespace (GNU DIFF option <bld>-b</bld>)
       <btn>@TabX</btn> - Columnar Whitespace (GNU DIFF option <bld>-E</bld>)
       <btn>@EOL</btn> - Whitespace at End-of-Line (GNU DIFF option <bld>-Z</bld>)
-The initial (default) setting is to suppress none of these individual\
+The initial (default) setting is to suppress none of these individual display\
       categories. However, note that the "@TabX" category involves the USE of\
       yet another preference (<itl>$pref(tabstops)</itl>), to compute the\
       intended result of paired Whitespace that (after TAB expansion) reaches\
@@ -13743,7 +14547,9 @@ One other small point should be made about ALL of the Behavior settings -\
       preference identifiers when storing and retrieving the values to the\
       preferences file. While this was not originally intended to be a\
       "feature", it does exhibit the unusual ability for a single preference\
-      file to be directly USABLE on multiple platforms, WITHOUT data collisions.
+      file to be directly USABLE on multiple platforms, WITHOUT data\
+      collisions, and presuming you have a multi-platform situation all using\
+      a <itl>single</itl> preference file.
       It also means that each platform will require its OWN specialization\
       work, as regards which specific keys are being configured to do what.
 
@@ -13838,6 +14644,11 @@ This defines the number of characters for each tabstop in the main display\
       [Tab] will not generally cause pieces of text to "align" as might\
       ordinarily be expected. This problem gets worse when considering the use\
       of "so called" proportional fonts. Nevertheless, the default is 8. 
+      Further note that ONE of the difference suppression categories (@TabX),\
+      both the display AND the Engine instances, will utilize this value when\
+      evaluating if that suppression will be applied. As such, it is MORE than\
+      just a means to spacing of its surrounding text.
+
 
 <bld>The remaining Appearance items</bld>
 are all formerly internal color settings that have now been made\
@@ -13848,11 +14659,13 @@ are all formerly internal color settings that have now been made\
 
 <bld>$pref(inform)</bld>
       is used primarily in the production of popup ToolTip window backgrounds\
-      to help draw your attention to it (before it disappears). Its other use\
-      plays a role in the editting sequence of a global hotkey definition to\
+      to help draw your attention to it (before it disappears). Other uses\
+      include a role in the editting sequence of a global hotkey definition to\
       again draw your attention to the "<itl>sensitive state</itl>" where just\
       <bld>touching</bld> practically ANY key on the keyboard will result in\
-      advancing the definition procedure. The default is "goldenrod".
+      advancing the definition procedure. It also serves as the Highlight that\
+      warns of an impending "Diff" when modifying critical preferences. The\
+      default is "goldenrod".
 
 <bld>$pref(adjcdr)</bld>
       is used exclusively by the <btn>Split</btn> or <btn>Combine</btn>\
@@ -13883,6 +14696,221 @@ are all formerly internal color settings that have now been made\
       Changebars (if requested), to indicate a COLLISION between diff\
       regions during a 3way diff. Classically this color had actually\
       been hardcoded, let alone defaulted to "yellow".
+
+<hdr>Engine</hdr>
+
+As often mentioned, $g(name) was originally designed as a graphic wrapper\
+      to the UNIX-based "Diff" utility. As such, that tool served as the target\
+      of what was POSSIBLE, and thus what would comprise the general set of\
+      preferences to be parameterized. Yet several other "work-alike" Engines,\
+      some with exceptional capabilities have come to exist since.
+      The following preferences, unlike most others, are intended to DEFINE the\
+      interface to a <bld>generic</bld> external differencing tool that\
+      $g(name) invokes when it needs to compare file pairs. It is divided into\
+      two nearly identical descriptor groups, corresponding to the two basic\
+      services $g(name) requires of its external engine:
+      1. a command to generate the actual Diff hunks themselves; and
+      2. a command to recursively FIND pairs of files HAVING differences.
+
+As delivered, these commands are, in fact, invocations of the SAME underlying\
+      tool (eg. Diff), though they need NOT be. Yet, in practice, many engines\
+      simply require an extra flag option (or two) to accomplish the\
+      recursive service named above. As each of these represents an\
+      <itl>external</itl> command each is identified by the FIRST WORD of\
+      their values. It is expected that such commands will be "found" by the\
+      operating system using this "name"-word alone (typically by searching\
+      for it wherever other such commands would be found, for instance via\
+      the users <cmp>PATH</cmp> environment variable).
+
+      Associated with each command is a group of option flags that indicate\
+      specific features $g(name) is prepared to utilize <bld>IFF</bld> the\
+      engine itself HAS such a capability. Each option is presented as a\
+      text field where the LITERAL flag for the described option is SPECIFIED,\
+      together with a checkbox toggle item to designate if that option should\
+      be USED, when $g(name) requests either of the two services.
+      However - when BOTH services have IDENTICAL "names" (ie. First word),\
+      then only ONE SET of associated options is presented for configuration\
+      (as they are actually the SAME underlying tool). Just recognize that the\
+      options of "<itl>$pref(egnCmd)</itl>" <bld>will be shared</bld> by the\
+      "<itl>$pref(egnSrchCmd)</itl>" service when invoked.
+      Conversely, if that first "name"-word of the two commands differ, then\
+      EACH command will provide its OWN group of options, suitable for\
+      configuring, what is therefore DISTINCT external commands.
+
+      From a configuration standpoint, these settings all operate the same\
+      way. Each is actually a PAIR of settings: a toggle (to say please USE\
+      this setting) and a text-field to DEFINE the literal flag it requires.\
+      Most flags are NOT designed to accept a "value", although if such a\
+      value can be CONCATENATED to the flag, it would work. For those few\
+      flags that EXPECT to have a value (identified below when possible) there\
+      is an special encoding that can be given if it is REQUIRED that the flag\
+      be seperated from its value: simply PREFIX the flag with a single blank\
+      and $g(name) will then format the flag AND value as desired.
+
+<bld>$pref(egnCmd)</bld>
+
+This is quite simply the "Diff" command to be used. It is the SOURCE of what\
+      is eventually used to form the "<itl>$pref(diffcmd)</itl>" preference.\
+      It is HERE that one could supply any "extra" option flags if, with the\
+      intent of causing a NEW prototype Diff command to be formed, thereby\
+      CAUSING any <itl>temporary pass-thru</itl> flags from the original\
+      command line to be eliminated.
+
+      Subordinate to this basic command, are the following KNOWN option flags:
+
+      <bld>$pref(egnCase)</bld>
+      <bld>$pref(eopCase)</bld>     (default <bld>-i</bld>)
+      Ignores differences related to capitalizations.
+
+      <bld>$pref(egnBlanks)</bld>
+      <bld>$pref(eopBlanks)</bld>     (default <bld>-w</bld>)
+      Ignores differences relating to ANY form of Whitespace.
+
+      <bld>$pref(egn#Blanks)</bld>
+      <bld>$pref(eop#Blanks)</bld>     (default <bld>-b</bld>)
+      Ignores differences related to Whitespace of non-identical length.
+
+      <bld>$pref(egn@TabX)</bld>
+      <bld>$pref(eop@TabX)</bld>     (default <bld>-E</bld>)
+      Ignores differences related to Tab-expansion to a COMMON location.
+
+      <bld>$pref(egn@EOL)</bld>
+      <bld>$pref(eop@EOL)</bld>     (default <bld>-Z</bld>)
+      Ignores differences related to Whitespace found at an end-of-line.
+
+      <bld>$pref(egnTabSiz)</bld>
+      <bld>$pref(eopTabSiz)</bld>     (default <bld>--tabsize</bld>)
+      This defines the option to inform Diff of the WIDTH of a single [Tab].
+      The actual VALUE passed is defined by the "<itl>$pref(tabstops)</itl>"
+      preference, within the <btn>Appearance</btn> section.
+
+
+<bld>$pref(egnSrchCmd)</bld>
+
+The command (with likely additional flags) $g(name) uses to search a given\
+      pair of directory <bld>trees</bld> recursively to locate all pairs of\
+      resultant files that contain differences. Each pair will be expected to\
+      be named identically as the search proceeds, except for the starting\
+      directories.
+
+      $g(name) choosing to USE this service originates from either the command\
+      line (or the interactive dialog), and will only be effective when\
+      <bld>both</bld> given inputs <itl>ARE</itl> directories, AND the proper\
+      recursion-authorization option has been supplied (via dialog OR cmdline).
+      However, in terms of its <itl>PRECEDENCE</itl>, using a directory pairing\
+      to recursively locate files only applies when <bld>no SCM</bld> is\
+      involved. This <itl>MAY</itl> result in complaints of\
+      "<itl>no files found</itl>" in certain circumstances; yet IF the SCM\
+      access were to be DISABLED (this <bld>IS</bld> why the value "None"\
+      exists as a choice in the "<itl>$pref(scmPrefer)</itl>" setting),\
+      the recursive search WOULD then work.
+
+      The default value provided (diff <bld>-r</bld>) is somewhat better than\
+      the former default (which also included the <bld>-q</bld> flag). Both\
+      are reasonable, but not always ideal. First they <itl>presume</itl>\
+      the use of a GNU-like Diff Engine (to be understood to mean) "recursive"\
+      and "quiet" respectively. But the use of the "quiet" option implies how\
+      and what is eventually reported by the search. Using it, <itl>ALL</itl>\
+      like-named files are reported, <itl>even when they do not appear to be\
+      Text files</itl>. This means your resulting file list can contain files\
+      that are KNOWN to be different, despite not being files that can be\
+      readily compared or visually read, let alone reviewed, merged, etc.\
+      Leaving the "quiet" option OUT, effectively results in Diff\
+      <itl>SUPPRESSING</itl> any files that are considered (by the GNU Diff\
+      Engine, at least) to be <bld>binary</bld> (eg. non-text) from being\
+      returned as candidates.
+      While this may be a better result, it is possibly still not perfect.\
+      There are instances, of seemingly "Text-like" files, for which $g(name)\
+      might still be inappropriate. A Cscope database, for one, comes to mind.
+
+      Thus you may wish to <bld>use</bld> yet <itl>more</itl> options here\
+      (such as the Gnu Diff <bld>-x</bld> or <bld>-X</bld> options) that tell\
+      the Engine to <bld>ignore</bld> specified filename patterns when\
+      searching for file pairs. The first of these is provided as a possible\
+      (and value-passing) built-in configuration option (shown below). The\
+      values it would pass come from the "<itl>$pref(xcludeFils)</itl>"\
+      preference defined under the <btn>General</btn> tab, which is the\
+      <bld>same</bld> list of excluded file patterns used by any\
+      NON-recursive searches done bu $g(name).
+
+      <bld>$pref(egnXcludFil)</bld>
+      <bld>$pref(eopXcludFil)</bld>     (default <bld>-x</bld>)
+      This defines a REPEATING option to inform Diff what filename patterns
+      to ignore. The VALUEs passed are defined by the preference
+      "<itl>$pref(xcludeFils)</itl>", from the <btn>General</btn> section.
+
+      As mentioned earlier, should the first word of the two command names\
+      DIFFER, an entire SECOND SET of suppression flag definition and use\
+      toggles will be made available for configuration. For completeness\
+      sake, we note their names here, but each is defaulted and operates\
+      EXACTLY as described earlier, but EXCLUSIVELY for recursive searching:
+
+      <bld>$pref(egnSCase)</bld>
+      <bld>$pref(eopSCase)</bld>     (default <bld>-i</bld>)
+      Ignores differences related to capitalizations.
+
+      <bld>$pref(egnSBlanks)</bld>
+      <bld>$pref(eopSBlanks)</bld>     (default <bld>-w</bld>)
+      Ignores differences relating to ANY form of Whitespace.
+
+      <bld>$pref(egnS#Blanks)</bld>
+      <bld>$pref(eopS#Blanks)</bld>     (default <bld>-b</bld>)
+      Ignores differences related to Whitespace of non-identical length.
+
+      <bld>$pref(egnS@TabX)</bld>
+      <bld>$pref(eopS@TabX)</bld>     (default <bld>-E</bld>)
+      Ignores differences related to Tab-expansion to a COMMON location.
+
+      <bld>$pref(egnS@EOL)</bld>
+      <bld>$pref(eopS@EOL)</bld>     (default <bld>-Z</bld>)
+      Ignores differences related to Whitespace found at an end-of-line.
+
+      <bld>$pref(egnSTabSiz)</bld>
+      <bld>$pref(eopSTabSiz)</bld>     (default <bld>--tabsize</bld>)
+      This defines the option to inform Diff of the WIDTH of a single [Tab].
+
+<bld>Configuration notes</bld>
+
+      You should review the documentation for your configured Engine to\
+      determine if other available options might assist in "getting the desired\
+      results". $g(name) does not, itself, interpret ANY of these option flags\
+      and simply sends them to the Engine when requesting either service.\
+      HOWEVER - because the handling of the results <itl>returned</itl> by the\
+      Engine drives what then happens, it <bld>is possible</bld> that YOUR\
+      chosen Engine might not "report back" its results in a syntax\
+      intelligible to $g(name), which presently understands both the "normal"\
+      AND "Unified" formats. If such is the case, contact us for assistance.
+
+      But if you are the adventurous sort, or cant locate a viable copy of\
+      "Diff" for your platform, (or wish to try a DIFFERENT algorithm), you\
+      could configure something like:
+
+      "$pref(egnCmd)" : <bld>git diff</bld>
+        "$pref(egnCase)" : <bld>-i</bld>
+        "$pref(egnBlanks)" : <bld>-w</bld>
+        "$pref(egn#Blanks)" : <bld>-b</bld>
+        "$pref(egn@TabX)" :     (leave empty - Git non-support)
+        "$pref(egn@EOL)" : <bld>--ignore-space-at-eol</bld>
+        "$pref(egnTabSiz)" :    (again leave this empty - Git non-support)
+ 
+
+      "$pref(egnSrchCmd)" : <bld>git diff --diff-format=M</bld>
+        "$pref(egnXcludFil)" : (empty: dont try ":!" - didnt work)
+
+      We are neither GIT experts, nor actually ADVOCATING its usage, or\
+      suggesting that the above would be the ONLY way to configure for its use.\
+      This is nothing more than an EXAMPLE of configuring a DIFFERENT engine\
+      OTHER than the expected default. Git is both formidable AND ever\
+      changing; but it WAS POSSIBLE to configure it effectively.
+
+      Remember that if two distinct commands are chosen for the two service\
+      routines, then a secondary set of "suppression" options will be presented\
+      for configuration for the recursive search service. BOTH sets are\
+      initially defined and defaulted per the original Diff Engine. Be aware\
+      any "extra" options ADDED to the "<itl>$pref(egnCmd)</itl>" preference\
+      should likely be added to the "<itl>$pref(egnSrchCmd)</itl>" preference\
+      to ensure SEARCHES that locate files will actually FIND the files that\
+      the other service is expected to report differences within.
 
 <hdr>Custom Settings</hdr>
 
@@ -14744,15 +15772,21 @@ proc ::combobox::Build {w args } {
     # to handle later on...
     array set options $args
 
-    # now, the dropdown list... the same renaming nonsense
-    # must go on here as well...
-    set widgets(dropdown)   [toplevel  $w.top]
-    set widgets(listbox) [listbox   $w.top.list]
-    set widgets(vsb)     [scrollbar $w.top.vsb]
-
+    # Next, the dropdown list (built offscreen) ...
+    # which also requires some extra window management foo
+    wm withdraw     [set widgets(dropdown) [toplevel  $w.top]]
+    wm overrideredirect $widgets(dropdown) 1
+    wm transient        $widgets(dropdown) [winfo toplevel $w]
+    wm group            $widgets(dropdown) [winfo  parent  $w]
+    wm resizable        $widgets(dropdown) 0 0
+    
+    # The listbox and scrollbar go INSIDE that window,
+    # ... but we only manage the vsb (later on) AS NEEDED
+    set   widgets(listbox) [listbox   $w.top.list]
+    set   widgets(vsb)     [scrollbar $w.top.vsb]
     pack $widgets(listbox) -side left -fill both -expand y
 
-    # fine tune the widgets based on the options (and a few
+    # now fine tune the widgets based on the options (and a few
     # arbitrary values...)
 
     # NB: we are going to use the frame to handle the relief
@@ -14792,18 +15826,11 @@ proc ::combobox::Build {w args } {
 #    trace add variable ::combobox::${w}::entryTextVariable write \
 #        [list ::combobox::EntryTrace $w]
 
-    # do some window management foo on the dropdown window
-    wm overrideredirect $widgets(dropdown) 1
-    wm transient        $widgets(dropdown) [winfo toplevel $w]
-    wm group            $widgets(dropdown) [winfo parent $w]
-    wm resizable        $widgets(dropdown) 0 0
-    wm withdraw         $widgets(dropdown)
-    
     # this moves the original frame widget proc into our
     # namespace and gives it a handy name
     rename ::$w $widgets(frame)
 
-    # now, create our widget proc. Obviously (?) it goes in
+    # Finally, create our widget proc. Obviously (?) it goes in
     # the global namespace. All combobox widgets will actually
     # share the same widget proc to cut down on the amount of
     # bloat. 
@@ -14811,8 +15838,9 @@ proc ::combobox::Build {w args } {
         "eval ::combobox::WidgetProc $w \$command \$args"
 
 
-    # ok, the thing exists... let's do a bit more configuration. 
-    if {[catch "::combobox::Configure [list $widgets(this)] [array get options]" error]} {
+    # ok, the thing exists... let's do a bit more INSTANCE configuration. 
+    if {[catch "::combobox::Configure \
+                    [list $widgets(this)] [array get options]" error]} {
         catch {destroy $w}
         error "internal error: $error"
     }
@@ -16928,7 +17956,7 @@ proc iTT_PopUp {wid tiptxt} {
     wm overrideredirect .tooltips_wind 1
     wm geometry .tooltips_wind +$X+$Y
     label .tooltips_wind.l -text $tiptxt -border 1 -relief raised \
-      -background $opts(inform) -foreground $w(foreground)
+      -background $opts(inform) -foreground $w(fgnd)
     pack .tooltips_wind.l
 
     # make invisible
