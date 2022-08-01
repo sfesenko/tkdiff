@@ -540,7 +540,7 @@ foreach {key val desc} [subst {
     customCode        {}                                                     {}
     deltag        "-background $Pdel -font $bold"
                                           {Tag options for deleted diff region}
-    diffcmd       ""                                             {Diff command}
+    diffcmd       "diff"                                         {Diff command}
     difftag       "-background $Pdif"            {Tag options for diff regions}
     editor        ""                                {Program for editing files}
     egnCmd        "diff"                                             {Diff cmd}
@@ -631,7 +631,7 @@ unset Pdel Pins Pchm Polp Padj Pinf Pcur Pdif Pcht Pbyt key desc val
 
 # Further ensure wrapping is turned off. This might piss off a few people,
 # but it would screw up the display ROYALLY to have things wrap
-lappend opts(textopt) "-wrap none"
+append opts(textopt) " -wrap none"
 
 # Work-around for bad font approximations,
 # as suggested by Don Libes (libes@nist.gov).
@@ -898,7 +898,6 @@ if {[file exists $g(rcfile)]} {
           preferences" "\nmay not be in effect." "\n\nFile: $g(rcfile)" \
           "\nError: $error"] " "]
     }
-}
 
 ###############################################################################
 # Preference Morphing (if this were a proc)
@@ -917,11 +916,11 @@ if {[file exists $g(rcfile)]} {
 # V3.0 was the first codebase NEEDING this for (~ V2.xx+) files...
 #       If user has a 'diffopt' Pref defined (from their rc file),
 #       magically convert/merge that to become 'diffcmd'
-if {[info exists opts(diffopt)]} {
-    set opts(diffcmd) "diff"    ;# The V3.0 original DEFAULT value
-    lappend opts(diffcmd) {*}$opts(diffopt)
-    unset opts(diffopt)
-}
+    if {[info exists opts(diffopt)]} {
+        set opts(diffcmd) "diff"    ;# The V3.0 original DEFAULT value
+        lappend opts(diffcmd) {*}$opts(diffopt)
+        unset opts(diffopt)
+    }
 
 # 2nd hack  (files become version stamped)
 # V4.3.1 Began recording the Codebase version that WROTE the Prefs, but when
@@ -929,41 +928,43 @@ if {[info exists opts(diffopt)]} {
 #       Luckily, no SEMANTICS ever CHANGED in the codebase since that time,
 #       thus nothing needs adjusting beyond the stamp LOCATION itself
 #           (maintaining the evolutionary chain)
-if {[info exists "prefsFileVersioni"]} {
-    set opts(prefsVrsn)   $prefsFileVersion
-    unset $prefsFileVersion
-}
+    if {[info exists "prefsFileVersion"]} {
+        set opts(prefsVrsn)   $prefsFileVersion
+        unset $prefsFileVersion
+    }
 
 # 3rd   (PERMANENT location of the 'File Version')
 # V5.1 Decided it made more sense to keep the "FV" (fileVrsn) WITH the datums
 # and thus base future MORPHs on the versions themselves.
 #       Morphing is an UPWARD process, all bets are off if the FV is NEWER!
-if {[info exists opts(prefsVrsn)]
-&&  [regexp {[0-9]+(?:\.[0-9]+)*(?:[ab][0-9]+)?} $opts(prefsVrsn) FV]
-&&  [regexp {[0-9]+(?:\.[0-9]+)*(?:[ab][0-9]+)?}   $g(version)    CV]
-&&  [package vcompare $FV $CV] <= 0} {
+    if {[info exists opts(prefsVrsn)]
+    &&  [regexp {[0-9]+(?:\.[0-9]+)*(?:[ab][0-9]+)?} $opts(prefsVrsn) FV]
+    &&  [regexp {[0-9]+(?:\.[0-9]+)*(?:[ab][0-9]+)?}   $g(version)    CV]
+    &&  [package vcompare $FV $CV] <= 0} {
 
-    # V5.5 Re-oriented how Diff (as an Engine) is CONFIGd for use in TkDiff
-    if {![package vsatisfies $FV "5.5-"]} {
-        # 1. No longer presumes "diffcmd" IS (GNU) Diff (& can append args to)
-        # merges SRCH args into the NEW Srch-cmd (which DEFAULTs to "diff")
-        # 2. Similarly, suppression categories are now explicit (and mapping
-        # the old 'blackbox' flag set is not worth it). Just whack'em; the
-        # resultant All-Suppressions-OFF default lets the USER then RE-config. 
-        # 3. "ignoreblanks" is now "ignSuprs" (same semantics different NAME),
-        #    "ignoreRegexLn" and "ignoreEmptyLn" ALL now bitBased-boolean vals.
-        # 4. "diffcmd" is now DERIVED (as opposed to user-SET) thus will be
-        # rewritten internally (later), requiring no further action.
-        lappend opts(egnSrchCmd) {*}$opts(fRecurs)
-        if {$opts(ignoreEmptyLn)} { set opts(ignoreEmptyLn) 8 }
-        if {$opts(ignoreRegexLn)} { set opts(ignoreRegexLn) 4 }
-        if {$opts(ignoreblanks)}  { set opts(ignSuprs)      2 }
-        unset -nocomplain opts(fRecurs) opts(ignoreblanksopt) opts(ignoreblanks)
+        # V5.5 Re-oriented how Diff (as an Engine) is CONFIGd for use in TkDiff
+        if {![package vsatisfies $FV "5.5-"]} {
+            # 1. No longer presumes "diffcmd" IS (GNU) Diff exclusively. Merges
+            # SRCH args into the NEW Srch-cmd (which simply DEFAULTs to "diff")
+            # 2. Similarly, suppression categories are now explicit (DO NOT MAP
+            # the old 'blackbox' flag set -is not worth it- Just whack'em); the
+            # resultant All-Suppressions-OFF default makes USER then RE-config. 
+            # 3. "ignoreblanks" is now "ignSuprs" (same semantics - new NAME),
+            #    "ignoreRegexLn" and "ignoreEmptyLn" became bit-Based booleans.
+            # 4. "diffcmd" is now DERIVED (as opposed to user-SET) thus will be
+            # rewritten internally (later), requiring no further action.
+            lappend opts(egnSrchCmd) {*}$opts(fRecurs)
+            if {$opts(ignoreEmptyLn)} { set opts(ignoreEmptyLn) 8 }
+            if {$opts(ignoreRegexLn)} { set opts(ignoreRegexLn) 4 }
+            if {$opts(ignoreblanks)}  { set opts(ignSuprs)      2 }
+            unset -nocomplain  \
+                opts(fRecurs) opts(ignoreblanksopt) opts(ignoreblanks)
+        }
+    } else { popmsg "Your Preference file (V$FV) appears to be
+                    NEWER
+    than the $g(name) V$CV currently running.
+         This MAY NOT operate properly..." warning "Near CRITICAL warning"
     }
-} else { popmsg "Your Preference file (V$FV) appears to be
-                NEWER
-than the $g(name) V$CV currently running.
-     This MAY NOT operate properly..." warning "Near CRITICAL warning"
 }
 
 ###############################################################################
@@ -13955,7 +13956,7 @@ Preferences are organized onscreen into FIVE categories: General, Display,\
 
 This is the REAL command that will be run to create a diff of any two files.\
       It is NOT a modifiable preference, at least not directly; It simply\
-      displays HOW the command is presently configuredi, to which $g(name) will\
+      displays HOW the command is presently configured, to which $g(name) will\
       append some pair of files. However, its "<itl>content</itl>" will respond\
       to modifications made to OTHER pertinent preferences, including several\
       that may reside in other sections of the dialog. As originally delivered,\
