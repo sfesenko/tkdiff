@@ -1,3 +1,7 @@
+5.5.1		(08/19/2022)
+     * Minor repair of preference evolution logic to encompass stray begin/end version situations
+       responsible for inadvertent CRASH conditions at startup when converting a PRIOR Pref File.
+
 5.5		(07/21/2022)
      * CRITICAL logic repair to 'blanks' suppression support during INLINE hilite!
      * Alternate coding fix to vague (Mac observed) race-condition bug w/combobox mis-creation.
