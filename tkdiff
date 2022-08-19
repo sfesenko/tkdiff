@@ -35,7 +35,7 @@ package require Tk 8.5
 # N.B> version must be roughly formatted as Maj.Minor[.patch][anythingelse]
 #   It is parsed to PROMOTE old Preference data when required
 set g(name)    "TkDiff"
-set g(version) "5.5"
+set g(version) "5.5.1"
 set g(debug)     0  ;# Master setting - Initialized (by default) to false
 
 # get this out of the way -- we want to draw the whole user interface
@@ -930,7 +930,7 @@ if {[file exists $g(rcfile)]} {
 #           (maintaining the evolutionary chain)
     if {[info exists "prefsFileVersion"]} {
         set opts(prefsVrsn)   $prefsFileVersion
-        unset $prefsFileVersion
+        unset prefsFileVersion
     }
 
 # 3rd   (PERMANENT location of the 'File Version')
@@ -953,7 +953,9 @@ if {[file exists $g(rcfile)]} {
             #    "ignoreRegexLn" and "ignoreEmptyLn" became bit-Based booleans.
             # 4. "diffcmd" is now DERIVED (as opposed to user-SET) thus will be
             # rewritten internally (later), requiring no further action.
-            lappend opts(egnSrchCmd) {*}$opts(fRecurs)
+            if {[info exists opts(fRecurs)]} {
+                lappend opts(egnSrchCmd) {*}$opts(fRecurs)
+            }
             if {$opts(ignoreEmptyLn)} { set opts(ignoreEmptyLn) 8 }
             if {$opts(ignoreRegexLn)} { set opts(ignoreRegexLn) 4 }
             if {$opts(ignoreblanks)}  { set opts(ignSuprs)      2 }
