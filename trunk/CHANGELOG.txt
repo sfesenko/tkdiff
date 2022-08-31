@@ -1,3 +1,6 @@
+5.5.2		(08/31/2022)
+     * Yet MORE spurious CRASH conditions avoided (primarily in SCM Search startup situations).
+
 5.5.1		(08/19/2022)
      * Minor repair of preference evolution logic to encompass stray begin/end version situations
        responsible for inadvertent CRASH conditions at startup when converting a PRIOR Pref File.

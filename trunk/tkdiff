@@ -35,7 +35,7 @@ package require Tk 8.5
 # N.B> version must be roughly formatted as Maj.Minor[.patch][anythingelse]
 #   It is parsed to PROMOTE old Preference data when required
 set g(name)    "TkDiff"
-set g(version) "5.5.1"
+set g(version) "5.5.2"
 set g(debug)     0  ;# Master setting - Initialized (by default) to false
 
 # get this out of the way -- we want to draw the whole user interface
@@ -587,7 +587,7 @@ foreach {key val desc} [subst {
     ignoreRegexLn     0                {Suppress diffs of RegExp-matched lines}
     ignSuprs          0               {Utilize Engine suppresions when Diffing}
     inform        "$Pinf"        {Informational highlight: Tooltips + bindings}
-    inlinetag     "-background $Pcht -font $bold"
+    inlinetag     "-background $Pchm -font $bold"
                                {Tag options for diff region inline differences}
     inlSuprs      0                         {Designated suppression attributes}
     instag        "-background $Pins -font $bold"
@@ -2466,7 +2466,7 @@ proc assemble-args {} {
     #   NOTE: called fcns KNOW of these names and *may* load them independently
     # Also initialize count of how many IMPLIED files are ultimately derived
     # ...AND a marker that messaging WAS produced and MUST be evaluated
-    set MSG [set msg {}]
+    set tildechk [set MSG [set msg {}]]
     set Err [set cnt 0]
 
     # A 'conflict' file is a special animal (1 file representing 1->3 files)!
@@ -2497,7 +2497,7 @@ proc assemble-args {} {
             if {$N <= $pths} {
                 # Ensure a POSSIBLE ~User/whatever... is a REAL user(?)
                 # N.B> ??? This SHOULDN'T fail (but has). After all:
-                #         LOGIC says    No user --> No file!
+                #         LOGIC suggests    No user --> No file!
                 # TCL acts capricious on this LOGICAL point; Just DONT CRASH!!
                 # N.B> BUT - when OK, tildechk results w/LAST Fspec existence!
                 if {[catch {file exists $f($N)} tildechk]} { set Err 1; break }
@@ -2514,7 +2514,7 @@ proc assemble-args {} {
             #       (because no definitive Rev-ID actually exists)
             #   THAT MEANS having to UN-count that it got passed, but always
             #   REWRITING it as REQUESTING the *appropriate* "latest" revision
-            if {$Scm($N) == "Vpath" || $pths < $N} {
+            if {$Scm($N) == "Vpath" && $pths < $N} {
                 if {$r($N) != ""} { incr revs -1 }
                 set r($N) 0 ; # Presumption is we want the LATEST Vpath version
                 # BUT - if BOTH SCMs come up as Vpath, then the LEFT side needs
@@ -3014,6 +3014,7 @@ proc inquire-diff {} {
 proc inquire-git {revs} {
     global finfo
 
+    set MSG [set msg {}]
     # Git diff requires 0-2 commit-ish "somethings" (hash, HEAD, etc...)
     #
     # As such, we expect those args to come thru as 'revs'; 'pths' would only
@@ -3165,6 +3166,7 @@ proc inquire-git {revs} {
 proc inquire-svn {revs} {
     global finfo
 
+    set MSG [set msg {}]
     # 'svn diff --summarize' tells us WHAT changed across a range of revisions
     #
     # rev  is what we will tell svn cat to access
@@ -3273,6 +3275,7 @@ proc inquire-svn {revs} {
 proc inquire-cvs {revs} {
     global finfo
 
+    set MSG [set msg {}]
     # 'cvs diff --brief' tells us what changed
     #
     # rev is what we will tell cvs update -p to access
@@ -12474,7 +12477,7 @@ proc help-concept {mode} {
     global g pref
 
     set usage {
-    $g(name) may be started in any of the following forms(1-4):
+    $g(name) $g(version) may be started in any of the following forms(1-4):
         (Note that a FILESPEC is either a file, directory or a Subversion-
          style URL; optional parameters are documented here in [brackets])
 
