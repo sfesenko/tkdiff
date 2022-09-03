@@ -10837,7 +10837,7 @@ proc main {} {
     create-display
 
     # Evaluate any custom code the user MAY have provided
-    if { "$opts(customCode)" != {}} {
+    if { [string trim $opts(customCode)] != {}} {
         Dbg "Custom code IS in use...beware"
         if {[catch [list uplevel \#0 $opts(customCode)] error]} {
             set startupError "Error in custom code: \n\n$error"
