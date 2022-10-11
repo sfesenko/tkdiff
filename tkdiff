@@ -35,7 +35,7 @@ package require Tk 8.5
 # N.B> version must be roughly formatted as Maj.Minor[.patch][anythingelse]
 #   It is parsed to PROMOTE old Preference data when required
 set g(name)    "TkDiff"
-set g(version) "5.5.2"
+set g(version) "5.5.3"
 set g(debug)     0  ;# Master setting - Initialized (by default) to false
 
 # get this out of the way -- we want to draw the whole user interface
@@ -2268,7 +2268,7 @@ proc commandline {} {
                 # Step PAST the Preference filename (we grabbed it already)
                 #  IFF that is what it was - otherwise it is an actual DIFF arg
                 #   (depends on  Preferences LOCATION being a Dir, or not)
-                if ([info exists g(rcdir)] { incr argindex } {
+                if {[info exists g(rcdir)]} { incr argindex } {
                     append opts(diffcmd) " " [concat "$arg"]
                 }
             }
@@ -2512,16 +2512,20 @@ proc assemble-args {} {
             # PAY ATTENTION:
             # *User provided* REV data is summarily REMOVED for "Vpath" -
             #       (because no definitive Rev-ID actually exists)
-            #   THAT MEANS having to UN-count that it got passed, but always
-            #   REWRITING it as REQUESTING the *appropriate* "latest" revision
-            if {$Scm($N) == "Vpath" && $pths < $N} {
+            #   THAT MEANS having to UN-count it (IFF was passed) but ALWAYS
+            #   writing it as REQUESTING the *appropriate* "latest" revision
+            if {$Scm($N) == "Vpath"
+            ||  $N == 2 && $Scm(1) == "Vpath" && $Scm(2) == ""} {
                 if {$r($N) != ""} { incr revs -1 }
-                set r($N) 0 ; # Presumption is we want the LATEST Vpath version
-                # BUT - if BOTH SCMs come up as Vpath, then the LEFT side needs
-                # to be an EARLIER version than the one that will show up for
-                # the RIGHT side version.
-                if {$N==2 && ($Scm(1) == "Vpath")} { set r(1) 1 }
+                set r($N) 0 ; # Generally we want the LATEST Vpath version
+                #   BUT - if a ONE-Fspec SCM comes up as Vpath, then the LEFT
+                # side needs to be an EARLIER version than the one that will
+                # show up for the RIGHT side; the TWO-Fspec format MUST NOT!
+                # (must be ABLE to compare DISTINCT FSpecs that just *happen*
+                # to fall within a common VPATH; even if resolved to SAME file)
+                if {$N==2 && $Scm(2) == ""} { set r(1) 1 }
             }
+            Dbg "  N($N) f(N){$f($N)} r(N){$r($N)}" ;# ONLY modify Vpath revs!
         }
 
         Dbg " PAIRing SCM($Scm(1)/$Scm(2)) Fspec($pths) Rev($revs) Tchk($tildechk)"
@@ -12503,7 +12507,7 @@ proc help-concept {mode} {
         -@ REV        (of Ancestorfile - if coming from Source control)
         -o MERGEOUTPUTFILE
         -L LEFT_FILE_LABEL [-L RIGHT_FILE_LABEL]
-        -P PreferenceFilename          (when configured)
+        -P PreferenceFilename          (only when configured)
         -I RegularExpression           (ignore matched-lines)
         -B            (ignore empty-lines)
         -R            (recursive Directory Tree searching)
@@ -12657,8 +12661,9 @@ Practically everything in $g(name) is customizable and as such, those settings\
       <btn>On Preferences</btn> page) of how to adjust your runtime environment\
       to take advantage of the capability to have MORE than just a\
       <bld>single</bld> personal Preference file. Note that as delivered,\
-      $g(name) does <bld>not</bld> provide this feature until the specific\
-      configuration action is taken by the user, as described on that page.
+      $g(name) does <bld>not</bld> provide this feature, nor its companion\
+      command line option ("<bld>-P</bld>"), until the specific\configuration\
+      action is taken by the user, as described on that page.
 
 <hdr>Source Code Management</hdr>
 In all the SCM forms, $g(name) will detect which SCM system(s) are possible.\
@@ -13885,22 +13890,24 @@ Preferences are located (by default) in your home directory (identified by the\
       startup, the situation can be altered if that targeted location is,\
       in fact, a <itl>Directory</itl> (except in the system ROOT variant).
 
-In this case, $g(name) will look WITHIN that directory for the <bld>same</bld>\
-      base-name used to originally find the directory <bld>UNLESS</bld> a\
-      different name was supplied on the commandline via the\
-      "<bld>-P</bld> <itl>filename</itl>" option. This permits you to have\
-      more than just a SINGLE set of preferences (YOUR default), should you\
+In this alternate case, $g(name) will look WITHIN that directory for the\
+      <bld>same</bld> base-name used to originally find the directory\
+      <bld>UNLESS</bld> a different name was supplied on the commandline via\
+      the "<bld>-P</bld> <itl>filename</itl>" option. This permits you to have\
+      more than just the SINGLE set of preferences (YOUR default), should you\
       need different settings when it comes to which SCM system to use, or the\
       TAB-size for the files being examined, etc., etc. Note however, $g(name)\
       WILL NOT create this target directory itself. That is YOUR task to\
       configure. Without it, all you will have is a single Preference file,\
       and the command line option (<bld>-P</bld> <itl>filename</itl>) will\
-      become ignored <itl>for this purpose</itl>; remember that options given\
-      on the command line <bld>NOT</bld> RECOGNIZED as belonging to $g(name)\
-      are <itl>automatically</itl> thought to belong to Diff itself. This\
-      might easily lead to invalid syntactic commands, and failed operations.\
+      become ignored <itl>for this purpose</itl>; yet remember that options\
+      given on the command line <bld>NOT</bld> RECOGNIZED as belonging to\
+      $g(name) are <itl>automatically</itl> thought to belong to Diff itself.
+      IMPORTANT: This can easily lead to invalid syntactic commands, and failed\
+      operations - in particular, any attempt to pass a PreferenceFilename when\
+      a directory is <bld>NOT</bld> in use will certainly fail!
       Lastly, please note that the "<itl>filename</itl>" in this context is\
-      NOT allowed to contain "spaces", regardless of being quoted or NOT on\
+      NOT permitted to contain "spaces", regardless of being quoted or NOT on\
       the command line.
 
 As hinted earlier, you may view, edit, locally apply and even save preferences\

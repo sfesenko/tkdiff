@@ -1,3 +1,8 @@
+5.5.3		(10/11/2022)
+     * Crash elimination AND better  Help info regarding the OPTIONAL "-P file" option.
+     * Revised a prior (V5.5.2) fix that mishandled simplifying VPATH revision assignment,
+       accidentally deactivating most revision-to-revision command formats for all SCMs.
+
 5.5.2		(08/31/2022)
      * Yet MORE spurious CRASH conditions avoided (primarily in SCM Search startup situations).
 
