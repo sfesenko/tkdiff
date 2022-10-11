@@ -23,9 +23,11 @@ Platforms:
 On Unix, simply invoke it from the command line.
 tkdiff --help will list the options.
 
-On MacOS, wish is shipped with the OS. You can install tkdiff somewhere in
+On MacOS, Wish is shipped with the OS. You can install tkdiff somewhere in
 your path and invoke it from the terminal just as on Unix/Linux. Or you
 can double-click on it in the Finder, and a terminal will open and run it.
+Recently, (circa MacOS Monterey?) the provided Wish appears to be damaged,
+and we strongly recommend installing a replacement.
 
 On Windows, you must find diff.exe somewhere. You must install Wish on your
 computer. You can use ActiveTcl from www.activestate.com or get it from the
