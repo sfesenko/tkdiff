@@ -1,3 +1,9 @@
+5.6		(11/08/2022)
+     * Added recursion ability into directory searching for the 1-FSpec case:
+       allows file trees as input. Recommended primarily for the VPATH Scm.
+     * Recursion (both single and dual FSpec forms) supports patterned-fname exclusions
+     * Repaired merge-preview window jump-scroll action when current hunk is changed.
+
 5.5.3		(10/11/2022)
      * Crash elimination AND better  Help info regarding the OPTIONAL "-P file" option.
      * Revised a prior (V5.5.2) fix that mishandled simplifying VPATH revision assignment,

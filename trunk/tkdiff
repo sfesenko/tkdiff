@@ -35,7 +35,7 @@ package require Tk 8.5
 # N.B> version must be roughly formatted as Maj.Minor[.patch][anythingelse]
 #   It is parsed to PROMOTE old Preference data when required
 set g(name)    "TkDiff"
-set g(version) "5.5.3"
+set g(version) "5.6"
 set g(debug)     0  ;# Master setting - Initialized (by default) to false
 
 # get this out of the way -- we want to draw the whole user interface
@@ -350,7 +350,7 @@ array set ASYNc {
 #   The "lbl,Left" and "lbl,Right" and "title" entries are simply the DISPLAYED
 #   label values (set from whatever the ACTIVE pair of "lbl,*" entries are),
 #   and are tied directly to the GUI, (providing a cheap update mechanism), and
-#   "fRecurs" authorizes recursive descent if the Fspecs are BOTH directories.
+#   "fRecurs" authorizes recursive descent if the given Fspec(s) is/are Dirs.
 #
 #   Finally, "Vpath" only EXISTS (as a list of Vnodes) if the EnvVar VPATH did,
 #   with "Vpofst" noting how many nodes(0->N) were "TOP pruned" due to the CWD
@@ -905,7 +905,7 @@ if {[file exists $g(rcfile)]} {
 #   RARELY -  an EXISTING preference becomes inconsistent with the evolution
 #           of the code. As we cant know in advance what vintage file was just
 #   read-in, it may have just installed a SEMANTICALLY OLDER Pref. Its useful
-#   to map/adjust (or lat least, remove) such older Prefs (when reasonable).
+#   to map/adjust (or at least, remove) such older Prefs (when reasonable).
 #       Each of these "Morphs" chains forward to the next to allow ANY age of
 #   file to be processed UP the evolutionary path: an in-exact science at best!
 # N.B>  While ADDing NEW Prefs is never an issue, installing Prefs NEWER than
@@ -2400,8 +2400,9 @@ proc shortNm {fn {rmv {[pwd]}} {rpl {}}} {
 proc xclude { fn } {
     global opts
 
+    set fn [file tail $fn]
     foreach x $opts(xcludeFils) {
-        if {[string match "./$x" $fn]} { return 1 }
+        if {[string match $x $fn]} { return 1 }
     }
     return 0
 }
@@ -2628,22 +2629,25 @@ proc assemble-args {} {
                     } else {incr cnt 2}
                 }
 
-            } elseif {[file isdirectory $f(1)]} {
-                foreach P [glob -nocomplain -directory $f(1) -types f *] {
-                    if {[xclude $P]} { continue }
-                    set f(2) "[file join $f(1) [file tail $P]]"
-                    # N.B> Uses names IN Sandbox to PROBE the SCM
-                    if {[get-file-rev "$f(2)" $cnt+1 "$r(1)" $Scm(1) 1]} {
-                        array unset finfo "\[ptl]*,[expr $cnt+1]" ; set Err 1
-                    } elseif {[get-file "$f(2)" $cnt+2 1]} {
-                        array unset finfo "\[ptl]*,[expr $cnt+1]" ; set Err 1
-                        array unset finfo "\[ptl]*,[expr $cnt+2]"
-                    } else {incr cnt 2}
+            } elseif {[file isdirectory [set P $f(1)]]} {
+                # Only in this Dir, or the whole Tree ?
+                foreach D [expr {($finfo(fRecurs) && $Scm(1) in $g(scmS))
+                                                     ? [DFSobj Dir $P] : $P } ] {
+                    foreach P [glob -nocomplain -directory $D -types f *] {
+                        if {[xclude $P]} { continue }
+                        # N.B> Uses names IN Dir(s) to PROBE the SCM Sandbox
+                        if {[get-file-rev "$P" $cnt+1 "$r(1)" $Scm(1) 1]} {
+                            array unset finfo "\[ptl]*,[expr $cnt+1]" ; set Err 1
+                        } elseif {[get-file "$P" $cnt+2 1]} {
+                            array unset finfo "\[ptl]*,[expr $cnt+1]" ; set Err 1
+                            array unset finfo "\[ptl]*,[expr $cnt+2]"
+                        } else {incr cnt 2}
+                    }
                 }
             } else {
-                if {[get-file-rev "$f(1)" 1 "$r(1)" $Scm(1)]} {
+                if {[get-file-rev "$P" 1 "$r(1)" $Scm(1)]} {
                     array unset finfo "\[ptl]*,1" ; set Err 1
-                } elseif {[get-file "$f(1)" 2]} {
+                } elseif {[get-file "$P" 2]} {
                     array unset finfo "\[ptl]*,\[12]" ; set Err 1
                 } else {incr cnt 2}
             }
@@ -2653,16 +2657,19 @@ proc assemble-args {} {
             #  tkdiff -rREV1 -rREV2 FILESPEC    (file in, dir at) SCM sandbox
             #################################################################
             if {[file isdirectory [set P $f(1)]]} {
-                foreach f(2) [glob -nocomplain -directory $P -types f *] {
-                    if {[xclude $f(2)]} { continue }
-                    set f(1) "[file join $P [file tail $f(2)]]"
-                    # N.B> Uses names IN Sandbox to PROBE the SCM
-                    if {[get-file-rev "$f(1)" $cnt+1 "$r(1)" $Scm(1) 1]} {
-                        array unset finfo "\[ptl]*,[expr $cnt+1]" ; set Err 1
-                    } elseif {[get-file-rev "$f(2)" $cnt+2 "$r(2)" $Scm(2) 1]} {
-                        array unset finfo "\[ptl]*,[expr $cnt+1]" ; set Err 1
-                        array unset finfo "\[ptl]*,[expr $cnt+2]"
-                    } else {incr cnt 2}
+                # Only in this Dir, or the whole Tree ?
+                foreach D [expr {($finfo(fRecurs) && $Scm(1) in $g(scmS))
+                                                    ? [DFSobj Dir $P] : $P } ] {
+                    foreach P [glob -nocomplain -directory $D -types f *] {
+                        if {[xclude $P]} { continue }
+                        # N.B> Uses names IN Dir(s) to PROBE the SCM Sandbox
+                        if {[get-file-rev "$P" $cnt+1 "$r(1)" $Scm(1) 1]} {
+                            array unset finfo "\[ptl]*,[expr $cnt+1]" ; set Err 1
+                        } elseif {[get-file-rev "$P" $cnt+2 "$r(2)" $Scm(2) 1]} {
+                            array unset finfo "\[ptl]*,[expr $cnt+1]" ; set Err 1
+                            array unset finfo "\[ptl]*,[expr $cnt+2]"
+                        } else {incr cnt 2}
+                    }
                 }
             } else {
                 if {[get-file-rev "$P" 1 "$r(1)" $Scm(1)]} {
@@ -3571,7 +3578,7 @@ proc create-display {} {
 
     # Attach all remaining bindings (mostly User-assigned shortcut HOTkeys)
     # to NEARLY every widget we know !! (plus some 'client' specialty items)
-    setBinds {*}[lrange [DFSwdg $w(client)] 1 end] $w(merge) {.}
+    setBinds {*}[lrange [DFSobj Wdg $w(client)] 1 end] $w(merge) {.}
 
     # ...and ADVERTISE those HOTkeys into their pertinent MENU entries
     # N.B> DANGEROUS: 'glob-matching' doesnt support "ORed" filtering - so
@@ -3609,15 +3616,21 @@ proc create-display {} {
 }
 
 ###############################################################################
-# Odd recursive little procedure generates a LIST of widget NAMES
-# inclusive of the seed name and all DEEPER names emanating from it
+# Odd recursive little procedure generates a LIST of tree-structured objects
+#   (eg. widgetnames -OR- subdirectories) originating and including the SEED
+# name and all DEEPER names found from it (N.B> w/Dirs subject to exclusion)
 ###############################################################################
-proc DFSwdg { seed } {
+proc DFSobj { Obj seed } {
     lappend them $seed
-    foreach seed [winfo children $seed] { lappend them {*}[DFSwdg $seed] }
+    switch $Obj {
+    "Dir" { foreach seed [glob -n -d $seed -type d *] { if {![xclude $seed] } {
+                lappend them {*}[DFSobj Dir $seed] } }
+    }
+    "Wdg" { foreach seed [winfo children $seed] {
+                lappend them {*}[DFSobj Wdg $seed] }
+    }}
     return $them
 }
-
 
 ###############################################################################
 # When the user changes the "sync scrollbars" option, a trace fires to sync
@@ -8586,13 +8599,13 @@ proc merge-center {} {
     set firstline [$w(mergeText) index mark$hID]
     set totallines [$w(mergeText) index end]
 
-    if {$difflines / $totallines < $ywindow} {
+    if {($difflines / $totallines) < $ywindow} {
         # Diff fits in window, center it
         $w(mergeText) yview moveto [expr {($firstline + $difflines / 2) / \
-          $totallines - $ywindow / 2}].0
+          $totallines - ($ywindow / 2.0)}]
     } else {
         # Diff too big, show top part
-        $w(mergeText) yview moveto [expr {($firstline - 1) / $totallines}].0
+        $w(mergeText) yview moveto [expr {($firstline - 1) / $totallines}]
     }
 }
 
@@ -11056,14 +11069,12 @@ proc newDiff {} {
         #   Thus 'scm-updat' callback knows WAY to much about almost everything
         #   Be Carefull!!
         label $fSpec.l1  -text "FSpec 1:"
-        set w(newDiff,FSpec1) \
-        [entry $fSpec.e1 -textvariable finfo(f,1) -vcmd {scm-updat scm1 %W %P}]
+        entry $fSpec.e1 -textvariable finfo(f,1) -vcmd {scm-updat scm1 %W %P}
         entry $fSpec.er1 -textvariable finfo(rev,1) \
                      -vcmd "verify occupancy [label $fSpec.lr1 -text "-r"] %P"
 
         label $fSpec.l2  -text "FSpec 2:"
-        set w(newDiff,FSpec2) \
-        [entry $fSpec.e2 -textvariable finfo(f,2) -vcmd {scm-updat scm2 %W %P}]
+        entry $fSpec.e2 -textvariable finfo(f,2) -vcmd {scm-updat scm2 %W %P}
         entry $fSpec.er2 -textvariable finfo(rev,2) -validate key \
                      -vcmd "verify occupancy [label $fSpec.lr2 -text "-r"] %P" 
         $fSpec.er1 configure -validate key ;# allow validation AFTER .er2 exists
@@ -11211,12 +11222,12 @@ proc newDiff {} {
     # initialize dialog 
     set g(scmDOsrch) 0                  ;# Begin from a non-search SCM state
     set g(scmPrefer) "$opts(scmPrefer)" ;# and w/default SCM preferences
-    $w(newDiff,FSpec1) validate
-    $w(newDiff,FSpec2) validate
+    $w(newDiff).fSpec.e1 validate
+    $w(newDiff).fSpec.e2 validate
     set detectMrgFilChg $g(mergefile)
 
     ######
-    Dialog show $w(newDiff) w(NewDok) 0 $w(newDiff,FSpec1);# MODAL: wait here
+    Dialog show $w(newDiff) w(NewDok) 0 $w(newDiff).fSpec.e1;# MODAL: wait here
     ######
 
     Dialog dismiss $w(newDiff)
@@ -11265,15 +11276,6 @@ proc scm-updat {subcmd wdg val {recurs 0}} {
                 $W(2) configure -bg [$W(1) cget -bg]
             }
 
-            # If both Fspecs happen to be Directories, allow user to choose
-            # between a recursive or single-level candidate search evaluation
-            # UNLESS the options to do so dont actually exist!
-            set Recursv [file rootname $wdg].b
-            if {[file isdir $val] && [file isdir $finfo(f,$Other($ndx))]} {
-                if {![winfo ismapped $Recursv]} { grid        $Recursv }
-            } { if { [winfo ismapped $Recursv]} { grid remove $Recursv }   }
-            alignState $Recursv [expr {[string trim $opts(egnSrchCmd)]!={}}]
-
             # Finally, if the data happens to be a Rev-carrying URL we
             # need to lockout the user from its version-widget. Sadly, TCL
             # wont *do* a "switch fallthru" case, so we will recurse to it!
@@ -11301,13 +11303,29 @@ proc scm-updat {subcmd wdg val {recurs 0}} {
         "srch" {
             lset g(scmPrefer) $ndx-1 "$val" ;# Keep working global up-to-date
             # Cant search when ANY Fspec exists or a non-detected SCM
-            if {[$w(newDiff,FSpec1) index end] \
-            ||  [$w(newDiff,FSpec2) index end]} {
+            if {[string trim $finfo(f,1)] != "" \
+            ||  [string trim $finfo(f,2)] != ""} {
                 set wdg [string range $wdg 0 end-1]
                 foreach lbl "1lbl 2lbl" {
                     $wdg$lbl configure -text "   SCM :" -indicatoron 0
                     $wdg$lbl deselect
                 }
+
+                # Only allow following ONCE, regardless of ACTUAL side touched
+                if {$recurs} { return }
+
+                # If both Fspecs happen to be Directories (OR when the FIRST is
+                # a Dir and the other is EMPTY), allow user to choose between a
+                # recursive or single-level candidate srch evaluation - UNLESS
+                # the Engine opts to support Dir/Dir dont actually exist
+                set recursW [file rootname $wdg].b
+                if {[file isdir $finfo(f,1)] &&
+                   ([file isdir $finfo(f,2)] || ( "" == $finfo(f,2)
+                                    && [lindex $g(scmPrefer) 0] in $g(scmS)))} {
+                    if {![winfo ismapped $recursW]} { grid        $recursW }
+                } { if { [winfo ismapped $recursW]} { grid remove $recursW } }
+                alignState $recursW [expr {[string trim $opts(egnSrchCmd)]!={}}]
+
             # Otherwise srch is determined PER CHOSEN SCM for each Fspec
             } else {
                 if {$val in $g(scmSrch)} {
@@ -11317,8 +11335,8 @@ proc scm-updat {subcmd wdg val {recurs 0}} {
                     ${wdg}lbl configure -text "   SCM :" -indicatoron 0
                     ${wdg}lbl deselect
                 }
-                # MAY need to reactivate OTHER side (if Fspecs JUST went empty)
-                #   (N.B> recurs flag prevents nasty endless ping-pong loop)
+                # MAY need to reactivate OTHER side (if Fspec JUST went empty)
+                #   (N.B> added recurs flag stops nasty endless ping-pong loop)
                 if {!$recurs} { scm-updat srch $W($Other($ndx)) \
                                               [$W($Other($ndx)) cget -value] 1
                 }
@@ -12595,17 +12613,24 @@ In the first form(1), $g(name) will <itl>almost always</itl> present a dialog\
 In the second form(2), either or both <cmp>FILESPEC</cmp>s may be to a local\
       file or directory, or symbolic links to such. When a directory is involved,\
       only its contained FILES sharing a common name will be paired together,\
-      one from each original <cmp>FILESPEC</cmp>. Note that this <itl>CAN</itl>\
-      produce multiple pairs of files to be Diffed (if both were directories).\
-      $g(name) remembers all of them, and permits switching among them later.\
-      <itl>However</itl>, when trying to use a URL in this form (versioned or\
-      not), be advised that the OTHER filespec will <bld>not</bld> be accepted\
-      as a <itl>directory</itl> unless such directory is KNOWN to Subversion,\
-      (ie. the Working Copy). See form(4) below for more details.
-      However, when both <cmp>FILESPEC</cmp>s are <bld>real</bld> directories,\
-      a heretofore <itl>hidden</itl> button will appear allowing you to choose\
-      if said directories should be searched <itl>recursively</itl> or not.\
-      Pressing it will activate it (or not) with highlighting for feedback.\
+      one from each originally given <cmp>FILESPEC</cmp>. Note that this\
+      <itl>CAN</itl> produce multiple pairs of files to be Diff'ed (if both\
+      were directories). $g(name) remembers all of them, and permits switching\
+      among them later.
+      Generally, only the files of the <itl>given</itl> directory are\
+      considered as possible candidates, depending on the value of the\
+      <itl>other</itl> <cmp>FILESPEC</cmp>: when that is a <cmp>FILE</cmp>,\
+      only a single comparison will result. <itl>Yet</itl>, when trying to\
+      use a URL in this form (versioned or not), be advised that the OTHER\
+      filespec will <bld>not</bld> be accepted as a <itl>directory</itl> unless\
+      such directory is KNOWN to Subversion, (ie. the Working Copy).\
+      See form(4) below for more details.
+      However, when both <cmp>FILESPEC</cmp>s (or a singleton, which would\
+      technically be a form(4) occurrence), is/are <bld>real</bld> directories,\
+      a heretofore <itl>hidden</itl> button, <btn>Recurse Directory</btn> will\
+      appear allowing you to choose if said directories should be searched\
+      <itl>recursively</itl> or not, producing a TREE of FILE candidates.\
+      Pressing it toggles it on (or off) with highlighting for feedback.\
       Note that if the equivalent command line option (<bld>-R</bld>) was\
       already given, the button will appear being <itl>already activated</itl>.\
       One last point - if the button displays as <bld>disabled</bld> (regardless\
@@ -12662,7 +12687,7 @@ Practically everything in $g(name) is customizable and as such, those settings\
       to take advantage of the capability to have MORE than just a\
       <bld>single</bld> personal Preference file. Note that as delivered,\
       $g(name) does <bld>not</bld> provide this feature, nor its companion\
-      command line option ("<bld>-P</bld>"), until the specific\configuration\
+      command line option ("<bld>-P</bld>"), until the specific configuration\
       action is taken by the user, as described on that page.
 
 <hdr>Source Code Management</hdr>
